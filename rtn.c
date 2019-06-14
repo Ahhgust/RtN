@@ -44,6 +44,9 @@ char DEFAULT_CHROM[] = "chrM";
 
 #define DEFAULT_MIN_MAP_QUALITY 4
 
+// measured in bases of the genome
+#define DEFAULT_MIN_READ_LEN 20
+
 // The old ways are best.
 // good old macro to convert a phred quality score in ASCII format
 // into a probability
@@ -69,6 +72,8 @@ struct Options {
   bool ignoreIndels;
   bool verbose;
   bool train;
+  bool writeOffTarget;
+  int minReadSize;
 };
 
 struct SummaryStat {
@@ -107,7 +112,7 @@ die(const char * message) {
 
   }
 
-  cerr << "How to run this program!" << endl <<
+  cerr << "How to run this program:" << endl <<
     "Required " << endl
        << "\t-h humanFasta" << endl
        << "\t-n nonhumanFasta" << endl
@@ -118,6 +123,8 @@ die(const char * message) {
        << "\t-m minMappingQuality (" << DEFAULT_MIN_MAP_QUALITY << ")" << endl
     << "\t-t (train an SVM)" << endl
     << "\t-s bedFile (soft-clip reads to the amplicons specified in the bedFile)" << endl
+    << "\t-w (writes off-target reads; defaults to FALSE)" << endl
+    << "\t-l length (" << DEFAULT_MIN_READ_LEN << ") the minimum read length, as mapped to the genome)" << endl
     
     << endl << "The error estimate..." << endl
     << "\t-p pcrErrorPerReadPerBP (" << PCR_ERRORS_PER_BP << ")" << endl
@@ -153,6 +160,8 @@ parseOptions(char **argv) {
   opt.pcrErrorPerBp = PCR_ERRORS_PER_BP;
   opt.verbose = opt.ignoreIndels=false;
   opt.minMappingQuality = DEFAULT_MIN_MAP_QUALITY;
+  opt.writeOffTarget=false;
+  opt.minReadSize = DEFAULT_MIN_READ_LEN;
   
   for (; *argv != NULL; ++argv) {
     arg = *argv;
@@ -187,7 +196,12 @@ parseOptions(char **argv) {
       opt.pcrErrorPerBp = atoi(*argv);
     else if (f == 'm')
       opt.minMappingQuality = atoi(*argv);
-    else if (f == 'i') {
+    else if (f == 'l')
+      opt.minReadSize = atoi(*argv);
+    else if (f == 'w') {
+      opt.writeOffTarget = true;
+      --argv; // only a flag; no argument.
+    } else if (f == 'i') {
       opt.ignoreIndels = true;
       --argv; // only a flag; no argument.
     } else if (f == 't') {
@@ -801,12 +815,6 @@ trimToAmpBoundaries(BamRecord &r, const GenomicRegionVector &amps, unsigned &i) 
   // first try the coordinates after soft-clipping
   int myAmp = getAmpIndex(startPosition, stopPosition, amps, i, ! r.ReverseFlag() );
 
-      // whaa whaaaa
-  if (myAmp < 0 && r.Qname() == "6FV6F:00076:05272")  {
-    cerr << " this one " << myAmp << endl;
-    exit(1);
-  }
-  
   if (myAmp == MULTIPLE_AMPS) { // the coords after clipping are smaller. if they're still too big, kick it out!
     softclipEverything(r);
     return true;
@@ -825,17 +833,10 @@ trimToAmpBoundaries(BamRecord &r, const GenomicRegionVector &amps, unsigned &i) 
     }
   }
 
-  /*
-  if (r.Qname() == "6FV6F:00076:05272") {
-    cerr << "here too\n";
-  }
-  */
-  
   // adjust the soft-clipping 5'
   if (startPosition < amps[myAmp].pos1) {
     Cigar orig = r.GetCigar();
     Cigar newCig;
-    const CigarField front = orig.front();
     r.SetPosition( amps[myAmp].pos1 );
 
 
@@ -877,6 +878,7 @@ trimToAmpBoundaries(BamRecord &r, const GenomicRegionVector &amps, unsigned &i) 
       newCig.add( CigarField('S', softclipSize));             
     }
 
+    // sanity test
     if (newCig.NumQueryConsumed() !=  r.Length()) {
       cerr << "Deficit " << deficitRef << " " << startPosition << "\t" << amps[myAmp].pos1 << endl;
       cerr << "new "  << newCig << endl;
@@ -1065,14 +1067,14 @@ main(int argc, char** argv) {
          r.MapQuality() < opt.minMappingQuality ||
          (r.PairedFlag() && ! r.ProperPair())
          ) {
-      if (! opt.train)
+      if (! opt.train && opt.writeOffTarget)
         bw.WriteRecord(r);      
       continue;
     }
   
     chrID = r.ChrID();
     if (chrID != chromIndex) {
-      if (! opt.train)
+      if (! opt.train && opt.writeOffTarget)
         bw.WriteRecord(r);
       continue;
     }
@@ -1086,13 +1088,15 @@ main(int argc, char** argv) {
       bool readDropped = trimToAmpBoundaries( r, amps, ampIndex);
      
       if (readDropped) {
-        if (! opt.train) //TODO: have an option to NOT write these reads as well...
+        if (! opt.train && opt.minReadSize >= 0) 
           bw.WriteRecord(r);
         continue;
-      }
-      
+      }       
     }
     
+    if (r.GetCigar().NumReferenceConsumed() < opt.minReadSize)
+      continue;
+
     
     if (opt.train) {
       bool hasNN=true;
@@ -1117,7 +1121,7 @@ main(int argc, char** argv) {
 
   }
   if (opt.train) {
-    cout << "Readname\tNumMismatches\tReadLikelihood\tGenomePosition\tAverageMismatchQuality\tNumQ20Mismatches\tMeanPhred\tIsReverse\tNumAlignedBases" <<
+    cout << "Readname\tNumMismatches\tReadLikelihood\tGenomePosition\tAverageMismatchQuality\tNumQ20Mismatches\tMeanPhred\tIsReverse\tNumAlignedBases\t" <<
       "NumIndels\tNumQ20Indels\tMeanIndelQuality\tReadLikelihoodWithIndels" << endl;
     int nMin = min(trainingSize, numReadsSeen);
     for (int i = 0; i < nMin; ++i)
