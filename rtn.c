@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <cmath>
 #include <random>
+#include <algorithm>
 
 #include "SeqLib/RefGenome.h"
 #include "SeqLib/BWAWrapper.h"
@@ -12,6 +13,9 @@
 #include "SeqLib/BamHeader.h"
 #include "SeqLib/BamWriter.h"
 #include "SeqLib/BamReader.h"
+#include "SeqLib/BamRecord.h"
+
+
 
 using namespace SeqLib;
 using namespace std;
@@ -33,8 +37,8 @@ char DEFAULT_CHROM[] = "chrM";
 #define DEFAULT_GAPOPEN 5
 #define DEFAULT_GAPEXTEND 5
 #define DEFAULT_BANDWIDTH 1000
-#define DEFAULT_THREEPRIMECLIP 100
-#define DEFAULT_FIVEPRIMECLIP 100
+#define DEFAULT_THREEPRIMECLIP 1000
+#define DEFAULT_FIVEPRIMECLIP 1000
 // how many PCR errors are expected (per bp in a given read)
 #define PCR_ERRORS_PER_BP 0.02
 // 1% sequencing error is assumed if the qual string is empty
@@ -46,6 +50,8 @@ char DEFAULT_CHROM[] = "chrM";
 
 // measured in bases of the genome
 #define DEFAULT_MIN_READ_LEN 20
+
+#define DEFAULT_MIN_LIKELIHOOD 1e-5
 
 // The old ways are best.
 // good old macro to convert a phred quality score in ASCII format
@@ -73,6 +79,7 @@ struct Options {
   bool verbose;
   bool train;
   bool writeOffTarget;
+  double minLikelihood;
   int minReadSize;
 };
 
@@ -162,6 +169,7 @@ parseOptions(char **argv) {
   opt.minMappingQuality = DEFAULT_MIN_MAP_QUALITY;
   opt.writeOffTarget=false;
   opt.minReadSize = DEFAULT_MIN_READ_LEN;
+  opt.minLikelihood = DEFAULT_MIN_LIKELIHOOD;
   
   for (; *argv != NULL; ++argv) {
     arg = *argv;
@@ -198,6 +206,8 @@ parseOptions(char **argv) {
       opt.minMappingQuality = atoi(*argv);
     else if (f == 'l')
       opt.minReadSize = atoi(*argv);
+    else if (f == 'L')
+      opt.minLikelihood = atof(*argv);
     else if (f == 'w') {
       opt.writeOffTarget = true;
       --argv; // only a flag; no argument.
@@ -534,7 +544,7 @@ bool
 realignIt(std::string seq, std::string qSeq, BWAWrapper &bwa, RefGenome &ref,  BamRecordVector &results, SummaryStat &stat, Options &opt) {
   
   results.clear();  
-  bwa.AlignSequence(seq, "foo", results, false, 0.98, results.capacity());
+  bwa.AlignSequence(seq, "foo", results, false, 0.99, results.capacity());
   vector<BamRecord>::iterator it;
 
   const char *qseqRaw = qSeq.c_str();
@@ -969,9 +979,11 @@ main(int argc, char** argv) {
   Options opt = parseOptions(&(argv[1]));
   
   RefGenome ref;
-
+  RefGenome numtRef;
+  
   SummaryStat stat;
   vector<SummaryStat> stats;
+  vector<SummaryStat> stats2numts;
   
   int trainingSize=0;
   int numReadsSeen=0;
@@ -982,6 +994,7 @@ main(int argc, char** argv) {
   if (opt.train) {
     trainingSize = DEFAULT_TRAINING_SIZE;
     stats.resize(trainingSize+1);
+    stats2numts.resize(trainingSize+1);
   }
   
   ref.LoadIndex(opt.humanFastaDbFilename);
@@ -1013,6 +1026,7 @@ main(int argc, char** argv) {
   bwa2nonh.Set3primeClippingPenalty(opt.threePrimePenalty);
   bwa2nonh.Set5primeClippingPenalty(opt.fivePrimePenalty);
 
+  numtRef.LoadIndex(opt.nonhumanFastaDbFilename);
   
   SeqLib::BamReader br;
   br.Open( opt.bamFilename);
@@ -1041,7 +1055,7 @@ main(int argc, char** argv) {
   }
 
   
-  string refSequence = ref.QueryRegion(chromosomeName, 0, MITO_LENGTH);
+  //  string refSequence = ref.QueryRegion(chromosomeName, 0, MITO_LENGTH);
   //  const char *refAsCharStar = refSequence.c_str();
   
   BamRecord r;
@@ -1051,6 +1065,8 @@ main(int argc, char** argv) {
 
   BamRecordVector results;
 
+  BamRecordVector out;
+  
   GenomicRegionVector amps;
   unsigned ampIndex=0;
   if (opt.bedFilename != NULL) {
@@ -1067,15 +1083,19 @@ main(int argc, char** argv) {
          r.MapQuality() < opt.minMappingQuality ||
          (r.PairedFlag() && ! r.ProperPair())
          ) {
-      if (! opt.train && opt.writeOffTarget)
-        bw.WriteRecord(r);      
+      if (! opt.train && opt.writeOffTarget) {
+        //        bw.WriteRecord(r);
+        out.push_back(r);
+      }
       continue;
     }
   
     chrID = r.ChrID();
     if (chrID != chromIndex) {
-      if (! opt.train && opt.writeOffTarget)
-        bw.WriteRecord(r);
+      if (! opt.train && opt.writeOffTarget) {
+        //bw.WriteRecord(r);
+        out.push_back(r);
+      }
       continue;
     }
 
@@ -1088,8 +1108,10 @@ main(int argc, char** argv) {
       bool readDropped = trimToAmpBoundaries( r, amps, ampIndex);
      
       if (readDropped) {
-        if (! opt.train && opt.minReadSize >= 0) 
-          bw.WriteRecord(r);
+        if (! opt.train && opt.minReadSize >= 0) {
+          // bw.WriteRecord(r);
+          out.push_back(r);
+        }
         continue;
       }       
     }
@@ -1100,40 +1122,70 @@ main(int argc, char** argv) {
     
     if (opt.train) {
       bool hasNN=true;
+      bool hasNumtNN=true;
       // resevoir sample.
       if (numReadsSeen < trainingSize) { // haven't filled the resv.
         hasNN = getSummaryStats(r, bwa2hum, ref, results, stats[numReadsSeen], opt);
+        hasNumtNN = getSummaryStats(r, bwa2nonh, numtRef, results, stats2numts[numReadsSeen], opt);
       } else { // randomly replace an index with prob resSize/nReadsSeen
         int index = uniform( generator ) * numReadsSeen;
         if (index < trainingSize) {
           // if hasNN is false then stats[index] is unchanged.
           hasNN = getSummaryStats(r, bwa2hum, ref, results, stats[index], opt);
+          hasNumtNN = getSummaryStats(r, bwa2nonh, numtRef, results, stats2numts[numReadsSeen], opt);
         }
       }
 
-      if (hasNN)
+      if (hasNN && hasNumtNN)
         ++numReadsSeen;
       
-    } else { // APPLY the one-class SVM
+    } else { 
 
-      bw.WriteRecord(r);
+      bool hasNN=getSummaryStats(r, bwa2hum, ref, results, stat, opt);
+
+      if (hasNN) {
+        // try just a simple filter on the read likelihood
+        if (opt.ignoreIndels) {
+          
+          if (opt.minLikelihood <= stat.readLikelihood) {
+            //bw.WriteRecord(r);
+            out.push_back(r);     
+          }
+        } else if (opt.minLikelihood <= stat.readLikelihoodWithIndels) {
+          //bw.WriteRecord(r);
+          out.push_back(r);
+        }
+      }
+
     }
 
   }
-  if (opt.train) {
-    cout << "Readname\tNumMismatches\tReadLikelihood\tGenomePosition\tAverageMismatchQuality\tNumQ20Mismatches\tMeanPhred\tIsReverse\tNumAlignedBases\t" <<
-      "NumIndels\tNumQ20Indels\tMeanIndelQuality\tReadLikelihoodWithIndels" << endl;
-    int nMin = min(trainingSize, numReadsSeen);
-    for (int i = 0; i < nMin; ++i)
-      cout << stats[i] << endl;
-    
-  } else {
-    bw.Close();
-    //    bw.BuildIndex();
-  }
-  
   
 
+  
+  if (opt.train) {
+    cout << "Readname\tNumMismatches\tReadLikelihood\tGenomePosition\tAverageMismatchQuality\tNumQ20Mismatches\tMeanPhred\tIsReverse\tNumAlignedBases\t" <<
+      "NumIndels\tNumQ20Indels\tMeanIndelQuality\tReadLikelihoodWithIndels\t" <<
+      "Readname2\tNumMismatchesNUMT\tReadLikelihoodNUMT\tGenomePositionNUMT\tAverageMismatchQualityNUMT\tNumQ20MismatchesNUMT\tMeanPhredNUMT\tIsReverseNUMT\tNumAlignedBasesNUMT\t" <<
+      "NumIndelsNUMT\tNumQ20IndelsNUMT\tMeanIndelQualityNUMT\tReadLikelihoodWithIndelsNUMT" << endl;
+    int nMin = min(trainingSize, numReadsSeen);
+    for (int i = 0; i < nMin; ++i)
+      cout << stats[i] << "\t" << stats2numts[i] << endl;
+    
+  } else {
+    // in-place sort
+    BamRecordSort::ByReadPosition sorter;
+    std::sort(out.begin(), out.end(), sorter);
+
+    // write it to the bam
+    vector<BamRecord>::iterator it;
+    
+    for (it = out.begin(); it != out.end(); ++it)
+      bw.WriteRecord(*it);
+    
+    bw.Close();
+    bw.BuildIndex(); // and be a good person. make an index too.
+  }
   
   return 0;
 }
