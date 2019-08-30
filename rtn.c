@@ -6,6 +6,7 @@
 #include <cmath>
 #include <random>
 #include <algorithm>
+#include <unordered_map>
 
 #include "SeqLib/RefGenome.h"
 #include "SeqLib/BWAWrapper.h"
@@ -25,6 +26,9 @@ using namespace std;
 #define WITHIN_AMP -2
 #define MULTIPLE_AMPS -1
 
+// when the alignment returns nothing to the Numt database
+// this gives the default distance
+#define NUMT_NONN_PLACEHOLDER 99
 
 // taken from: https://stackoverflow.com/questions/5590381/easiest-way-to-convert-int-to-string-in-c
 #define INT2STRING( x ) static_cast< std::ostringstream & >( \
@@ -32,10 +36,14 @@ using namespace std;
 
 char DEFAULT_CHROM[] = "chrM"; 
 
+std::string DEFAULT_ZTAG = "ZH";
+
 #define DEFAULT_TRAINING_SIZE 100000
 
-#define DEFAULT_GAPOPEN 5
-#define DEFAULT_GAPEXTEND 5
+// BWA mapping parameters
+#define DEFAULT_MISMATCH 4
+#define DEFAULT_GAPOPEN 4
+#define DEFAULT_GAPEXTEND 4
 #define DEFAULT_BANDWIDTH 1000
 #define DEFAULT_THREEPRIMECLIP 1000
 #define DEFAULT_FIVEPRIMECLIP 1000
@@ -70,6 +78,7 @@ struct Options {
   char *bedFilename;
   int gapOpen;
   int gapExtend;
+  int mismatch;
   int bandwidth;
   int threePrimePenalty;
   int fivePrimePenalty;
@@ -141,6 +150,7 @@ die(const char * message) {
     << "\t-o gapOpen (" << DEFAULT_GAPOPEN << ")" << endl
     << "\t-e gapExtend (" << DEFAULT_GAPEXTEND << ")" << endl
     << "\t-w bandWidth (" << DEFAULT_BANDWIDTH << ")" << endl
+    << "\t-x mismatchPenalty (" << DEFAULT_MISMATCH << ")" << endl
 
     << "\t-3 3-primeclipping (" << DEFAULT_THREEPRIMECLIP << ")" << endl
        << "\t-5 5-primeclipping (" << DEFAULT_FIVEPRIMECLIP << ")" << endl << endl;
@@ -158,7 +168,8 @@ parseOptions(char **argv) {
   Options opt = {NULL, NULL, NULL};
   opt.chrom=DEFAULT_CHROM;
   opt.bedFilename=NULL;
-  
+
+  opt.mismatch = DEFAULT_MISMATCH;
   opt.gapOpen = DEFAULT_GAPOPEN;
   opt.gapExtend = DEFAULT_GAPEXTEND;
   opt.bandwidth = DEFAULT_BANDWIDTH;
@@ -206,6 +217,8 @@ parseOptions(char **argv) {
       opt.minMappingQuality = atoi(*argv);
     else if (f == 'l')
       opt.minReadSize = atoi(*argv);
+    else if (f == 'x')
+      opt.mismatch = atoi(*argv);
     else if (f == 'L')
       opt.minLikelihood = atof(*argv);
     else if (f == 'w') {
@@ -236,6 +249,33 @@ parseOptions(char **argv) {
     die("I need a bam file! (-b bam)");
   
   return opt;
+}
+
+/*
+  pure C style implementation used to find the substring postion of the last . in a filename...
+  and it's smart; only uses the one characters since the last file separator (assumed to be either a dos-separator
+  or a unix style. which isn't 100% correct, but it's close enough)
+  
+ */
+int
+findExtensionSubstringPosition(const char *c) {
+
+  int lastDotPos=-1;
+  int i = 0;
+  while (*c) {
+    if (*c == '.')
+      lastDotPos = i;
+    else if (*c == '/' || *c == '\\') { // previous '.' was in a directory name. assume either dir symbol and that people aren't jerks (putting a / in a filename)
+      lastDotPos = -1;
+    }
+    ++i;
+    ++c;
+  }
+  // no file extension. the substring wanted is the whole string
+  if (lastDotPos==-1)
+    return i;
+  
+  return lastDotPos;
 }
 
 /*
@@ -333,6 +373,62 @@ getExpectedNumberOfSequencingErrors(const string &seq, const string &quals, int 
 
 
 /*
+gets the start position in the read
+i.e., the first nucleotide after all soft-clipping
+*/
+int
+getStartSubstr(Cigar *ciggy) {
+
+  vector<CigarField>::iterator itr = ciggy->begin();
+  int startPositionRead=0;
+
+  char type;
+  uint32_t len;
+  // infer the start/stop positions in the read
+  // i.e., trim off the soft clipping
+
+  // start with soft-clip 5'
+  while (itr != ciggy->end() ) {
+    type = itr->Type();
+    len = itr->Length();
+    
+    if (type == 'S')
+      startPositionRead += len;
+    else if (type != 'H')
+      break;
+
+    ++itr;
+  }
+  return startPositionRead;
+}
+
+
+/*
+Returns the number of nucleotides to be trimmed off the end
+*/
+int
+getLastNClipped(Cigar *ciggy) {
+    // and read the cigar backwards...
+  int nOps = ciggy->size();
+  int clipLastN=0;
+  for (int i = nOps-1; i >= 0; --i) {
+    CigarField f = (*ciggy)[i];
+    if (f.Type() == 'S') {
+      clipLastN += f.Length();
+    } else if (f.Type() != 'H')
+      break;
+  }
+  return clipLastN;
+}
+
+int
+getStopSubstr(string &seq, Cigar *ciggy) {
+  int lastN = getLastNClipped(ciggy);
+  return seq.size() - lastN;
+}
+
+
+/*
   This computes the number of mismatches between two sequences;
   the number as taken as the sum of the number of substitution differences +
   the number of indel differences.
@@ -407,7 +503,7 @@ getMismatches(BamRecord &r, const char* seq, const char *ref, int *mismatches, i
  */
 
 int
-getWeightedMismatches(BamRecord &r, const char* seq, const char *ref, const char *quals, SummaryStat &stat, char qMax, Options &opt) {
+getWeightedMismatches(BamRecord &r, const char* seq, const char *ref, const char *quals, const char *seqEnd, SummaryStat &stat, char qMax, Options &opt) {
 
 
   Cigar ciggy = r.GetCigar();
@@ -429,6 +525,7 @@ getWeightedMismatches(BamRecord &r, const char* seq, const char *ref, const char
   
   int mismatchQualsum=0;
   int sumPhred=0;
+  
   // scroll past the front-most soft/hard clipping tag
   // don't need to adjust indexing b/c the input sequence are pre-adjusted for soft clipping
   if (t == 'S' || t == 'H') 
@@ -442,9 +539,16 @@ getWeightedMismatches(BamRecord &r, const char* seq, const char *ref, const char
   for ( ; c != ciggy.end(); ++c) {
     t = c->Type();
 
+    
     len = c->Length();
     if (c->ConsumesReference() ) {
       if (c->ConsumesQuery() ) {
+
+        if (seq >= seqEnd) {
+          cerr << "Should never happen..." << endl;
+        }
+
+        
         stat.numBases += len;
           
         for ( i = 0; i < len; ++i, ++ref, ++seq, ++quals) {
@@ -498,7 +602,7 @@ getWeightedMismatches(BamRecord &r, const char* seq, const char *ref, const char
 
         ref += len;
       }
-    } else { // consumes query, not reference (insertion in query or clipping)
+    } else if ( c->ConsumesQuery() ) { // consumes query, not reference (insertion in query or clipping)
       /* TODO; qualities of indels (take 2)! */
       if (! opt.ignoreIndels && t == 'I') {
 
@@ -544,18 +648,14 @@ bool
 realignIt(std::string seq, std::string qSeq, BWAWrapper &bwa, RefGenome &ref,  BamRecordVector &results, SummaryStat &stat, Options &opt) {
   
   results.clear();  
-  bwa.AlignSequence(seq, "foo", results, false, 0.99, results.capacity());
+  bwa.AlignSequence(seq, "foo", results, false, 0.99, 100);
   vector<BamRecord>::iterator it;
 
-  const char *qseqRaw = qSeq.c_str();
-  const char *seqRaw = seq.c_str();
-  
   string refSubstr, chromName;
 
   bool gotOne=false;
 
   SummaryStat thisStat;
-
   // take a look at the best hits from BWA
   for (it = results.begin(); it != results.end(); ++it) {
     int startPositionRead = it->AlignmentPosition();    
@@ -563,12 +663,23 @@ realignIt(std::string seq, std::string qSeq, BWAWrapper &bwa, RefGenome &ref,  B
     int genomeStop =it->PositionEnd();
     chromName = bwa.ChrIDToName( it->ChrID()  );    
     refSubstr = ref.QueryRegion( chromName, genomeStart, genomeStop-1);
+    
 
+    // Ensure you get the sequences from the bam record; not seq and qSeq
+    // (this accounts for the strand; bam alignments are always on the + strand)
+    string thisqSeq = it->QualitySequence();
+    const char *qseqRaw = thisqSeq.c_str();
+
+    string thisSeq = it->Sequence();
+    const char *seqRaw = thisSeq.c_str();
+    
     // and compute summary statistics for this alignment
     getWeightedMismatches(*it,
                           &(seqRaw[ startPositionRead ]),
                           refSubstr.c_str(),
-                          &(qseqRaw[ startPositionRead ]), thisStat, DEFAULT_SEQ_CHAR-33, opt);
+                          &(qseqRaw[ startPositionRead ]),
+                          &(seqRaw[ thisSeq.size() ]),
+                          thisStat, DEFAULT_SEQ_CHAR-33, opt);
     
     //    if ( thisTot > nTot || // aligned more bases
       //         (thisTot==nTot && thisProb > *readProb )){ // aligned same # of bases, but better posterior
@@ -590,22 +701,21 @@ realignIt(std::string seq, std::string qSeq, BWAWrapper &bwa, RefGenome &ref,  B
 
 
 bool
-getSummaryStats(BamRecord &r, BWAWrapper &bwa, RefGenome &ref,  BamRecordVector &results, SummaryStat &stat, Options &opt) {
+getSummaryStats(BamRecord &r, BWAWrapper &bwa, RefGenome &ref,  BamRecordVector &results, SummaryStat &stat, Options &opt, Cigar *ciggy) {
 
 
+  // Cannot use the cigar field associated with the read (yay seqlib memory error)
+  //  int startPositionRead = r.AlignmentPosition();
+  //  int stopPositionRead = r.AlignmentEndPosition();
 
-  int startPositionRead = r.AlignmentPosition();
-  int stopPositionRead = r.AlignmentEndPosition();
+
+  int startPositionRead = getStartSubstr(ciggy);
   int genomeStart = r.Position();
   
   string qualities = r.Qualities();
   string seq =r.Sequence();
-
-  string ciggy = r.CigarString();
-  if (ciggy == "*") {
-    cerr << "Should never happen." << endl << r;
-    exit(1);
-  }
+  int stopPositionRead = getStopSubstr(seq, ciggy);
+  
   
   bool hasNN = realignIt(
                          seq.substr( startPositionRead, stopPositionRead - startPositionRead),
@@ -622,46 +732,6 @@ getSummaryStats(BamRecord &r, BWAWrapper &bwa, RefGenome &ref,  BamRecordVector 
 
   return true;
 }
-
-
-
-
-
-bool
-realignItOld(std::string seq, BWAWrapper &bwa, RefGenome &ref,  BamRecordVector &results, int nMax, double targetDistance, Options &opt) {
-
-  results.clear();  
-  bwa.AlignSequence(seq, "foo", results, false, 0.8, nMax);
-
-  vector<BamRecord>::iterator it;
-
-  int matches, tot;
-  
-  string refSubstr, chromName;
-  
-  for (it = results.begin(); it != results.end(); ++it) {
-    string seq  = it->Sequence();
-    const char* rawSeq  =seq.c_str();
-    int startPositionRead = it->AlignmentPosition();
-
-    int genomeStart = it->Position();
-    int genomeStop =it->PositionEnd();
-    chromName = bwa.ChrIDToName( it->ChrID()  );
-    
-    refSubstr = ref.QueryRegion( chromName, genomeStart, genomeStop-1);
-
-    if (getMismatches(*it, &(rawSeq[ startPositionRead ]), refSubstr.c_str(), &matches, &tot, opt.ignoreIndels) ) {
-      //  cout << matches << "\t" << tot << "\t" << seqlen << endl;
-      if ((double)matches/tot < targetDistance) {
-        //        cout << "BOO\n";
-        return true;
-      }
-    }
-    
-  }
-  return false;
-}
-
 
 void
 softclipEverything(BamRecord &r) {
@@ -720,7 +790,7 @@ getAmpIndex(int32_t start, int32_t stop, const GenomicRegionVector &amps, unsign
     ++j;
   }
 
-
+  
   // lazy evaluation. the easy case.
   if (a==b && a != -1)
     return a;
@@ -731,13 +801,12 @@ getAmpIndex(int32_t start, int32_t stop, const GenomicRegionVector &amps, unsign
     if (a == -1) { // the read may be strictly within an amp. 
       return WITHIN_AMP; // WITHIN amp.
     } else if (a != b) { // the read doesn't span, but does begin strictly before one amp and dies out before the amp boundary
-
       
       // and ensure that it actually covers at least 1 base in the amp it's suppsoed to belong to.
       while (a < ampSize && amps[a].pos1 <= stop) {
-        if (start <= amps[a].pos1 &&  stop > amps[a].pos1)
+        if (start <= amps[a].pos1 &&  stop > amps[a].pos1) {
           return a;
-        
+        }
         ++a;
       }
 
@@ -783,9 +852,10 @@ getAmpIndex(int32_t start, int32_t stop, const GenomicRegionVector &amps, unsign
  */
 
 bool
-trimToAmpBoundaries(BamRecord &r, const GenomicRegionVector &amps, unsigned &i) {
+trimToAmpBoundaries(BamRecord &r, Cigar &cigar, Cigar &newCigar, const GenomicRegionVector &amps, unsigned &i) {
 
 
+  
   // 0-based coordinates (Genome)
   int32_t startPosition = r.Position();
   int32_t startPositionBeforeClip = r.PositionWithSClips();
@@ -810,16 +880,13 @@ trimToAmpBoundaries(BamRecord &r, const GenomicRegionVector &amps, unsigned &i) 
     return true;
   }
 
-
   // these use 1-based coordinates. together they are 0-based half open coordinates (google it). just like the bed file.
-  int32_t stopPosition = startPosition + r.GetCigar().NumReferenceConsumed(); 
+  int32_t stopPosition = startPosition + cigar.NumReferenceConsumed();
 
-  Cigar origCiggy = r.GetCigar();
-  int32_t stopPositionBeforeClip = stopPosition;
-  // re-add the soft-clipping to the stop-index (this is approximate)
-  if (origCiggy.back().Type() == 'S')
-    stopPosition += origCiggy.back().Length();
-  
+  // I tried adding soft-clipped positions back in to infer the amplicon
+  // this is a mistake; this procedure can only increase the amount of soft-clipping (5' and 3')
+  // so I cannot/should not try and undo this (soft-clipping is performed by the aligner or by up-stream analyses)
+  //int32_t stopPositionBeforeClip = stopPosition;
 
   
   // first try the coordinates after soft-clipping
@@ -830,146 +897,181 @@ trimToAmpBoundaries(BamRecord &r, const GenomicRegionVector &amps, unsigned &i) 
     return true;
   } else if (myAmp == WITHIN_AMP) {
 
+    /*
     // if the read is too short, try re-adding the soft clipping back in and see if that changes the inference.
     if (r.ReverseFlag()) {
       myAmp = getAmpIndex(startPosition, stopPositionBeforeClip, amps, i, ! r.ReverseFlag() );
     } else {
       myAmp = getAmpIndex(startPositionBeforeClip, stopPosition, amps, i, ! r.ReverseFlag() );
     }
-    
-    if (myAmp < 0) {
-      softclipEverything(r);
-      return true;
-    }
+    */
+    //if (myAmp < 0) {
+    softclipEverything(r);
+    return true;
+      //}
   }
 
+  
+
+  int nextPos = r.Position(); // work in 1-based indexing (same indexing as amps[myAmp].pos2)
+  
+  int qBasesConsumed=0;
+  int queryLength = r.Length(); // trimming can be inferred from the sequence length - the number of query bases consumed.
+  
+  bool softclipLeft = false;
+  if (startPosition < amps[myAmp].pos1)
+    softclipLeft = true;
+
+  bool softclipRight = false;
+  if (stopPosition > amps[myAmp].pos2)
+    softclipRight = true;
+
+
+  
+  uint32_t softclipLeftSize=0;
+  
   // adjust the soft-clipping 5'
+  // this sets the start position (new read)
   if (startPosition < amps[myAmp].pos1) {
-    Cigar orig = r.GetCigar();
-    Cigar newCig;
     r.SetPosition( amps[myAmp].pos1 );
+  }
+  
+  vector<CigarField>::iterator itr = cigar.begin();
 
 
-    // the number of reference bases that need to be consumed 5'...
-    int deficitRef = amps[myAmp].pos1 - startPosition;
-    int softclipSize = 0;
+  char type;
+  int len;
+  while (itr != cigar.end()) {
     
-    for(vector<CigarField>::iterator itr = orig.begin(); itr != orig.end(); ++itr) {
-      if (deficitRef <= 0 || itr->Type() == 'H') { // the soft-clipping has been accounted for. just copy the rest!
-        newCig.add( *itr );
-      } else { // these bases are to be (partially) soft-clipped.
+    type = itr->Type();
+    len = itr->Length();
 
+    if (itr->ConsumesQuery()) {
+      qBasesConsumed += len;
+    }
+
+    if (itr->ConsumesReference()) {
+      nextPos += len;
+    }
+
+    if (type == 'H') { // added no matter what...
+      newCigar.add(*itr); // and doesn't impact the positions as the sequence isn't present
+      ++itr;
+      continue;
+      
+    } else if (softclipLeft) {
+
+      // note that in the ielse if
+      // the current cigar OP is added in the if OUTSIDE of this else if code brace
+      if (nextPos == amps[myAmp].pos1) { // the current tag doesn't need to be split (it's consumed entirely). But softclipping must occur
+        newCigar.add( CigarField('S', qBasesConsumed));
+        softclipLeft = false;
+        softclipLeftSize = qBasesConsumed;
+        ++itr;
+        continue;
         
-        if (itr->ConsumesQuery()) {
-          softclipSize += itr->Length();
-        }
+        // len is correct, so don't update it.
+      } else if (nextPos > amps[myAmp].pos1) { // harder case. the tag *does* need to be split
+        // consumesReference must be true here (otherwise nextPos would've been evaluated on the last round
 
-        if (itr->ConsumesReference()) {
-          deficitRef -= itr->Length();
-
-          if (deficitRef == 0) { // clean break; I don't need to fracture the current cigar field
-            newCig.add( CigarField('S', softclipSize));
-            softclipSize=0;
-          } else if (deficitRef < 0) { // cut the current cigar-op in two. 
-
-            if (itr->ConsumesQuery() )
-              softclipSize += deficitRef; // consumes both Q and R,
-            
-            newCig.add( CigarField('S', softclipSize));             
-            newCig.add( CigarField( itr->Type(), -deficitRef));
-            softclipSize=0;
-          }
-        }
+        // the number of bases into the amplicon 
+        int diff = nextPos -  amps[myAmp].pos1;
+        
+        softclipLeftSize = qBasesConsumed;
+        if (itr->ConsumesQuery()) 
+          softclipLeftSize -= diff;
+        
+        newCigar.add( CigarField('S', softclipLeftSize));
+        len = diff; // effectively trims the op to the boundary of the amp (even deletions)
+        // note: no continue!
+        softclipLeft = false;
+      } else { // whole OP is consumed in soft clipping...
+        ++itr;
+        continue;
       }
       
     }
-    // iterated through the read. never wrote the  soft-clipping
-    if (softclipSize) {
-      newCig.add( CigarField('S', softclipSize));             
-    }
 
-    // sanity test
-    if (newCig.NumQueryConsumed() !=  r.Length()) {
-      cerr << "Deficit " << deficitRef << " " << startPosition << "\t" << amps[myAmp].pos1 << endl;
-      cerr << "new "  << newCig << endl;
-      cerr << "old " << r.GetCigar( ) << endl;
-      cerr << "Amp " << amps[myAmp] << endl;
-      cerr << r.Position() << "\t" << r.Position() + newCig.NumReferenceConsumed()  << "\tVERSUS\t" << amps[myAmp].pos1 << "\t" << amps[myAmp].pos2 << endl;
-      cerr << r << endl;
-      exit(1);
-    }
 
-    r.SetCigar(newCig);
-    
-  }
+    // whole op is within the amp...
+    if (nextPos <= amps[myAmp].pos2) {
+      newCigar.add( CigarField(type, len));
+    } else if (softclipRight) {
 
-  if (stopPosition > amps[myAmp].pos2+1) {
-    Cigar orig = r.GetCigar();
-    Cigar newCig;
-    int posGenome = r.Position(); // work in 1-based indexing (same indexing as amps[myAmp].pos2)
-    int nextPos = posGenome; 
-    int qBasesConsumed=0;
-    int queryLength = r.Length(); // trimming can be inferred from the sequence length - the number of query bases consumed.
-    
-    // write all of the cigar operations up until the end of the read
-    for(vector<CigarField>::iterator itr = orig.begin(); itr != orig.end(); ++itr) {
-      if (itr->ConsumesReference() ) {
-        nextPos = posGenome + itr->Length();
+      
+      int diff = nextPos - amps[myAmp].pos2; // the number of bases that need to be decreased in the current op
+      if (diff < 0) {
+        cerr << "should never happen" << endl;
       }
+
+
+      // qBasesConsumed includes len as well. This may need adjusting
+      int rightclipSize= queryLength - qBasesConsumed;
+      if (diff < len) // avoid a 0-len OP
+        newCigar.add( CigarField(type, len-diff));
       
       if (itr->ConsumesQuery() ) {
-        qBasesConsumed += itr->Length();
+        rightclipSize += diff;
       }
 
-      //      cout  << posGenome << "\t" << nextPos << "\t" << itr->Type() << "\t" << itr->Length() << endl;
+      newCigar.add(CigarField('S', rightclipSize ));
       
-      if (nextPos <= amps[myAmp].pos2) {
-        newCig.add( *itr );
-      } else { // we walked forward enough in the read where now we can start soft-clipping
-        // by construction, ConsumesReference is true here. (otherwise the if statement above never flips from TRUE to FALSE)
-        
-        int diff = nextPos - amps[myAmp].pos2;
-        
-        // minimum; if the current cigar element spans the boundary, this needs to be adjusted
-        int softclipSize = queryLength - qBasesConsumed;
-        
-        //        cerr << itr->Type() << "\t" << itr->Length() << "\t" << diff << endl;
-        if (itr->Length() - diff > 0) {
-          newCig.add( CigarField( itr->Type(), itr->Length() - diff) );
+      // search for more hard clipping, and add that OP as well...
+      // this OP does NOT impact the query or the ref
+      while (++itr != cigar.end()) {
+        if (itr->Type()=='H')
+          newCigar.add(*itr);
 
-          if (itr->ConsumesQuery() )
-            softclipSize += diff;
-          
-        } else if (itr->ConsumesQuery() )
-          softclipSize += itr->Length();
-
-        newCig.add( CigarField( 'S', softclipSize ));
-        
-        // and maintain hard clipping, but only if it was written in a way that's sane.
-        if (orig.back().Type() == 'H') {
-          newCig.add( orig.back() );
-        }
-        break;
       }
       
-      posGenome = nextPos;
-    }
-
-
-    if (newCig.NumQueryConsumed() !=  r.Length()) {
-      cerr << "Also new "  << newCig << endl;
-      cerr << "Also old " << r.GetCigar( ) << endl; 
-      cerr << r.Position() << "\t" << r.Position() + newCig.NumReferenceConsumed()  << "\tVERSUS\t" << amps[myAmp].pos1 << "\t" << amps[myAmp].pos2 << endl;
-      cerr << r << endl;
-      exit(1);
+      break;
     }
     
-    r.SetCigar(newCig);    
-            
+    ++itr;
   }
 
-
+  
+  int numQConsumedNew = newCigar.NumQueryConsumed();
+  int numQConsumedOld = cigar.NumQueryConsumed();
+  if (numQConsumedOld != numQConsumedNew) {
+    cout << "Should not happen!\n" <<
+      numQConsumedNew << " " << numQConsumedOld << endl <<
+      qBasesConsumed << "\t" << queryLength << endl <<
+      newCigar << " " <<
+      cigar << endl <<
+      r << endl <<
+      amps[myAmp].pos1 << " "  <<     amps[myAmp].pos2 << endl <<
+      r.Position() << " " <<  nextPos << endl;
+    exit(1);
+  }
+  
   return false;
+}
+
+inline void
+add2Cache(BamRecord &r, Cigar *ciggy, unordered_map<string, pair<int, int>> &cache, int numtMatches) {
+  string seq = r.Sequence();
+  
+  int startPositionRead = getStartSubstr(ciggy);
+  int stopPositionRead = getStopSubstr(seq, ciggy);
+  cache[seq.substr( startPositionRead, stopPositionRead - startPositionRead)] = std::make_pair(r.Position(), numtMatches);
+}
+
+inline bool
+isInReadCache(BamRecord &r, Cigar *ciggy, unordered_map<string, pair<int, int>> &cache, int &genomePos, int &numtMatches) {
+
+  //  int startPositionRead = r.AlignmentPosition();
+  //int stopPositionRead = r.AlignmentEndPosition();
+  string seq = r.Sequence();
+  int startPositionRead = getStartSubstr(ciggy);
+  int stopPositionRead = getStopSubstr(seq, ciggy);
+  if (cache.find( seq.substr( startPositionRead, stopPositionRead - startPositionRead)) == cache.end() )
+    return false;
+
+  std::pair<int, int> p = cache[ seq.substr( startPositionRead, stopPositionRead - startPositionRead) ];
+  genomePos = p.first;
+  numtMatches = p.second;
+  return true;
 }
 
 
@@ -982,8 +1084,17 @@ main(int argc, char** argv) {
   RefGenome numtRef;
   
   SummaryStat stat;
+  SummaryStat numtStat;
+  
   vector<SummaryStat> stats;
   vector<SummaryStat> stats2numts;
+
+  // associates a read sequence (after softclipping)
+  // which has a perfect hit to the human mito (likelihood is 0)
+  // to the genome position of this perfect hit as well as the mismatch distance to the nearest
+  // numt
+  unordered_map<string, pair<int, int>> perfectHmtHits;
+  
   
   int trainingSize=0;
   int numReadsSeen=0;
@@ -1035,8 +1146,8 @@ main(int argc, char** argv) {
 
 
   if (! opt.train) {
-    string outFilename(opt.bamFilename);
-    outFilename += ".out.bam";
+    string outFilename(opt.bamFilename, findExtensionSubstringPosition( opt.bamFilename) );
+    outFilename += ".rtn.bam";
     bw.Open(outFilename);
     bw.SetHeader( br.Header() );
     bw.WriteHeader();
@@ -1054,9 +1165,6 @@ main(int argc, char** argv) {
     die(NULL);
   }
 
-  
-  //  string refSequence = ref.QueryRegion(chromosomeName, 0, MITO_LENGTH);
-  //  const char *refAsCharStar = refSequence.c_str();
   
   BamRecord r;
   r.init();
@@ -1084,7 +1192,6 @@ main(int argc, char** argv) {
          (r.PairedFlag() && ! r.ProperPair())
          ) {
       if (! opt.train && opt.writeOffTarget) {
-        //        bw.WriteRecord(r);
         out.push_back(r);
       }
       continue;
@@ -1093,72 +1200,137 @@ main(int argc, char** argv) {
     chrID = r.ChrID();
     if (chrID != chromIndex) {
       if (! opt.train && opt.writeOffTarget) {
-        //bw.WriteRecord(r);
         out.push_back(r);
       }
       continue;
     }
 
+    
+    Cigar orig = r.GetCigar();
+    Cigar newCig;
+    Cigar *cig2use= &orig;
+    
     /* 
        trim the read to the amplicon boundaries... 
     */
     if (opt.bedFilename != NULL) {
-
       
-      bool readDropped = trimToAmpBoundaries( r, amps, ampIndex);
+      bool readDropped = trimToAmpBoundaries( r, orig, newCig, amps, ampIndex);
      
       if (readDropped) {
         if (! opt.train && opt.minReadSize >= 0) {
-          // bw.WriteRecord(r);
           out.push_back(r);
         }
         continue;
-      }       
-    }
+      }
+      
+      cig2use = &newCig;
+    } 
     
-    if (r.GetCigar().NumReferenceConsumed() < opt.minReadSize)
+    if (cig2use->NumReferenceConsumed() < opt.minReadSize)
       continue;
 
-    
+    // todo: pass cig2use to all constructors!
     if (opt.train) {
       bool hasNN=true;
       bool hasNumtNN=true;
       // resevoir sample.
       if (numReadsSeen < trainingSize) { // haven't filled the resv.
-        hasNN = getSummaryStats(r, bwa2hum, ref, results, stats[numReadsSeen], opt);
-        hasNumtNN = getSummaryStats(r, bwa2nonh, numtRef, results, stats2numts[numReadsSeen], opt);
+        hasNN = getSummaryStats(r, bwa2hum, ref, results, stats[numReadsSeen], opt, cig2use);
+        hasNumtNN = getSummaryStats(r, bwa2nonh, numtRef, results, stats2numts[numReadsSeen], opt, cig2use);
       } else { // randomly replace an index with prob resSize/nReadsSeen
         int index = uniform( generator ) * numReadsSeen;
         if (index < trainingSize) {
           // if hasNN is false then stats[index] is unchanged.
-          hasNN = getSummaryStats(r, bwa2hum, ref, results, stats[index], opt);
-          hasNumtNN = getSummaryStats(r, bwa2nonh, numtRef, results, stats2numts[numReadsSeen], opt);
+          hasNN = getSummaryStats(r, bwa2hum, ref, results, stats[index], opt, cig2use);
+          hasNumtNN = getSummaryStats(r, bwa2nonh, numtRef, results, stats2numts[numReadsSeen], opt, cig2use);
         }
       }
 
       if (hasNN && hasNumtNN)
         ++numReadsSeen;
       
-    } else { 
+    } else {
 
-      bool hasNN=getSummaryStats(r, bwa2hum, ref, results, stat, opt);
+      // check to see if we've seen this string sequence before
+      // (after soft clipping)
+      // if we have AND it was a perfect match to some human sequence
+      // then the read passes, regardless of the filtering strategy used.
+      // (i.e., the likelihood of the read is 1, which is not less than your threshold)
+      int newgenomePos=-1;
+      int numtDistance=-1; // only used in the if below...
+      if (isInReadCache(r, cig2use, perfectHmtHits, newgenomePos, numtDistance)) {
+
+        out.push_back(r);
+        out.back().AddIntTag("ZH",  0);  // definitional. that's the only case that we add it to the cache.
+        out.back().AddIntTag("ZN",  numtDistance); 
+        if (cig2use != &orig) 
+          out.back().SetCigar(*cig2use);
+        
+        continue;
+      }
+
+      
+      bool hasNN=getSummaryStats(r, bwa2hum, ref, results, stat, opt, cig2use);
+
+      bool hasNumtNN = getSummaryStats(r, bwa2nonh, numtRef, results, numtStat, opt, cig2use);
 
       if (hasNN) {
         // try just a simple filter on the read likelihood
         if (opt.ignoreIndels) {
           
-          if (opt.minLikelihood <= stat.readLikelihood) {
-            //bw.WriteRecord(r);
-            out.push_back(r);     
-          }
-        } else if (opt.minLikelihood <= stat.readLikelihoodWithIndels) {
-          //bw.WriteRecord(r);
-          out.push_back(r);
+          if (opt.minLikelihood > stat.readLikelihood) 
+            r.SetMapQuality(0);
+          
+
+        } else {
+
+          if (opt.minLikelihood > stat.readLikelihoodWithIndels)  
+            r.SetMapQuality(0);
+          
         }
+
+        out.push_back(r);
+        
+        out.back().AddIntTag("ZH",  stat.numMismatches);
+        if (hasNumtNN)
+          out.back().AddIntTag("ZN",  numtStat.numMismatches);
+        else
+          out.back().AddIntTag("ZN",  NUMT_NONN_PLACEHOLDER);
+
+
+        cout << "here " << *cig2use << endl;
+
+        // a bug in seqlib occurs if you modify the bam *after* you modify the cigar. modifying the cigar must occur last.
+        if (cig2use != &orig) {
+          out.back().SetCigar(*cig2use);
+        }
+
+        // again try the singleton design pattern.
+        // that is, record the perfect hits to HmtDB. If you see another perfect hit it should be in your
+        // final bam, regardless of the q-score sctring.
+        // It only works on a subset of cases (really, numMismatches==0 -> likelihood == 1,
+        // which will be included no MATTER what.
+        // otherwise, you have to consider the quality scores.
+        if (stat.numMismatches==0) {
+          if (hasNumtNN)
+            add2Cache(r, cig2use, perfectHmtHits, numtStat.numMismatches);
+          else
+            add2Cache(r, cig2use, perfectHmtHits, NUMT_NONN_PLACEHOLDER);
+        }
+        
+      } else { // alignment to HmtDB returned... nothing?! 
+        r.SetMapQuality(0);
+        out.push_back(r);
+        
+        out.back().AddIntTag("ZH",  NUMT_NONN_PLACEHOLDER);
+        if (hasNumtNN)
+          out.back().AddIntTag("ZN",  numtStat.numMismatches);
+        else
+          out.back().AddIntTag("ZN",  NUMT_NONN_PLACEHOLDER);
+
       }
-
     }
-
   }
   
 
@@ -1182,11 +1354,11 @@ main(int argc, char** argv) {
     
     for (it = out.begin(); it != out.end(); ++it)
       bw.WriteRecord(*it);
-    
+
     bw.Close();
     bw.BuildIndex(); // and be a good person. make an index too.
   }
-  
+
   return 0;
 }
 
