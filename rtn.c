@@ -652,7 +652,8 @@ realignIt(std::string seq, std::string qSeq, BWAWrapper &bwa, RefGenome &ref,  B
   vector<BamRecord>::iterator it;
 
   string refSubstr, chromName;
-
+  int seqlen = seq.size();
+  
   bool gotOne=false;
 
   SummaryStat thisStat;
@@ -691,6 +692,15 @@ realignIt(std::string seq, std::string qSeq, BWAWrapper &bwa, RefGenome &ref,  B
         ) {
       
       stat = thisStat;
+      // perfect hit. No need to iterate through the subsequent alignments
+
+      if (opt.ignoreIndels) {
+        if (stat.numBases == seqlen && stat.numMismatches==0)
+          return true;
+      } else {
+        if (stat.numBases == seqlen && stat.readLikelihoodWithIndels==1.)
+          return true;
+      }
     }
     gotOne=true;
         
@@ -1299,7 +1309,6 @@ main(int argc, char** argv) {
           out.back().AddIntTag("ZN",  NUMT_NONN_PLACEHOLDER);
 
 
-        cout << "here " << *cig2use << endl;
 
         // a bug in seqlib occurs if you modify the bam *after* you modify the cigar. modifying the cigar must occur last.
         if (cig2use != &orig) {
