@@ -36,7 +36,9 @@ using namespace std;
 
 char DEFAULT_CHROM[] = "chrM"; 
 
-std::string DEFAULT_ZTAG = "ZH";
+// tags for the BAM files...
+std::string DEFAULT_ZTAG_HUMAN = "ZH";
+std::string DEFAULT_ZTAG_NUMT  = "ZN";
 
 #define DEFAULT_TRAINING_SIZE 100000
 
@@ -83,7 +85,6 @@ struct Options {
   int threePrimePenalty;
   int fivePrimePenalty;
   int minMappingQuality;
-  double pcrErrorPerBp;
   bool ignoreIndels;
   bool verbose;
   bool train;
@@ -131,19 +132,18 @@ die(const char * message) {
   cerr << "How to run this program:" << endl <<
     "Required " << endl
        << "\t-h humanFasta" << endl
-       << "\t-n nonhumanFasta" << endl
+       << "\t-n numtFasta" << endl
        << "\t-b bam" << endl
     << endl << "Optional (with default)" << endl
     << endl << "The naming (of the mito genome)..." << endl
     << "\t-c chromosome (" << DEFAULT_CHROM << ")" << endl
        << "\t-m minMappingQuality (" << DEFAULT_MIN_MAP_QUALITY << ")" << endl
-    << "\t-t (train an SVM)" << endl
+    << "\t-t (output training data; summary statistics on the reads)" << endl
     << "\t-s bedFile (soft-clip reads to the amplicons specified in the bedFile)" << endl
     << "\t-w (writes off-target reads; defaults to FALSE)" << endl
     << "\t-l length (" << DEFAULT_MIN_READ_LEN << ") the minimum read length, as mapped to the genome)" << endl
     
     << endl << "The error estimate..." << endl
-    << "\t-p pcrErrorPerReadPerBP (" << PCR_ERRORS_PER_BP << ")" << endl
     << "\t-i ignoreIndels ( false )" << endl
     
     << endl << "Read mapping parameters..." << endl
@@ -175,7 +175,6 @@ parseOptions(char **argv) {
   opt.bandwidth = DEFAULT_BANDWIDTH;
   opt.threePrimePenalty = DEFAULT_THREEPRIMECLIP;
   opt.fivePrimePenalty = DEFAULT_FIVEPRIMECLIP;
-  opt.pcrErrorPerBp = PCR_ERRORS_PER_BP;
   opt.verbose = opt.ignoreIndels=false;
   opt.minMappingQuality = DEFAULT_MIN_MAP_QUALITY;
   opt.writeOffTarget=false;
@@ -211,8 +210,6 @@ parseOptions(char **argv) {
       opt.threePrimePenalty = atoi(*argv);
     else if (f == '5')
       opt.fivePrimePenalty = atoi(*argv);
-    else if (f == 'p')
-      opt.pcrErrorPerBp = atoi(*argv);
     else if (f == 'm')
       opt.minMappingQuality = atoi(*argv);
     else if (f == 'l')
@@ -519,7 +516,7 @@ getWeightedMismatches(BamRecord &r, const char* seq, const char *ref, const char
   
   Cigar::const_iterator c = ciggy.begin();
   if (c == ciggy.end()) // empty cigar?! I don't think this is legitimate, but you never know!
-    return 0;
+    return -1;
 
   char t = c->Type();
   
@@ -533,7 +530,7 @@ getWeightedMismatches(BamRecord &r, const char* seq, const char *ref, const char
 
   
   if (c == ciggy.end()) // a cigar that's only clipping...? also weird, but okay I suppose.
-    return 0;
+    return -1;
   
   
   for ( ; c != ciggy.end(); ++c) {
@@ -656,7 +653,8 @@ realignIt(std::string seq, std::string qSeq, BWAWrapper &bwa, RefGenome &ref,  B
   
   bool gotOne=false;
 
-  SummaryStat thisStat;
+  SummaryStat thisStat = stat;
+  
   // take a look at the best hits from BWA
   for (it = results.begin(); it != results.end(); ++it) {
     int startPositionRead = it->AlignmentPosition();    
@@ -675,13 +673,14 @@ realignIt(std::string seq, std::string qSeq, BWAWrapper &bwa, RefGenome &ref,  B
     const char *seqRaw = thisSeq.c_str();
     
     // and compute summary statistics for this alignment
-    getWeightedMismatches(*it,
+    int retval = getWeightedMismatches(*it,
                           &(seqRaw[ startPositionRead ]),
                           refSubstr.c_str(),
                           &(qseqRaw[ startPositionRead ]),
                           &(seqRaw[ thisSeq.size() ]),
                           thisStat, DEFAULT_SEQ_CHAR-33, opt);
-    
+    if (retval < 0)
+      continue;
     //    if ( thisTot > nTot || // aligned more bases
       //         (thisTot==nTot && thisProb > *readProb )){ // aligned same # of bases, but better posterior
 
@@ -693,7 +692,6 @@ realignIt(std::string seq, std::string qSeq, BWAWrapper &bwa, RefGenome &ref,  B
       
       stat = thisStat;
       // perfect hit. No need to iterate through the subsequent alignments
-
       if (opt.ignoreIndels) {
         if (stat.numBases == seqlen && stat.numMismatches==0)
           return true;
@@ -725,7 +723,11 @@ getSummaryStats(BamRecord &r, BWAWrapper &bwa, RefGenome &ref,  BamRecordVector 
   string qualities = r.Qualities();
   string seq =r.Sequence();
   int stopPositionRead = getStopSubstr(seq, ciggy);
-  
+
+  stat.genomeMidpoint = genomeStart + (int)(startPositionRead/2. + stopPositionRead/2.);
+  stat.isReverse=r.ReverseFlag();
+  stat.readName = r.Qname();
+
   
   bool hasNN = realignIt(
                          seq.substr( startPositionRead, stopPositionRead - startPositionRead),
@@ -734,10 +736,6 @@ getSummaryStats(BamRecord &r, BWAWrapper &bwa, RefGenome &ref,  BamRecordVector 
 
   if (! hasNN)
     return false;
-
-  stat.genomeMidpoint = genomeStart + (int)(startPositionRead/2. + stopPositionRead/2.);
-  stat.isReverse=r.ReverseFlag();
-  stat.readName = r.Qname();
 
 
   return true;
@@ -1253,7 +1251,7 @@ main(int argc, char** argv) {
         if (index < trainingSize) {
           // if hasNN is false then stats[index] is unchanged.
           hasNN = getSummaryStats(r, bwa2hum, ref, results, stats[index], opt, cig2use);
-          hasNumtNN = getSummaryStats(r, bwa2nonh, numtRef, results, stats2numts[numReadsSeen], opt, cig2use);
+          hasNumtNN = getSummaryStats(r, bwa2nonh, numtRef, results, stats2numts[index], opt, cig2use);
         }
       }
 
@@ -1272,8 +1270,8 @@ main(int argc, char** argv) {
       if (isInReadCache(r, cig2use, perfectHmtHits, newgenomePos, numtDistance)) {
 
         out.push_back(r);
-        out.back().AddIntTag("ZH",  0);  // definitional. that's the only case that we add it to the cache.
-        out.back().AddIntTag("ZN",  numtDistance); 
+        out.back().AddIntTag(DEFAULT_ZTAG_HUMAN,  0);  // definitional. that's the only case that we add it to the cache.
+        out.back().AddIntTag(DEFAULT_ZTAG_NUMT,  numtDistance); 
         if (cig2use != &orig) 
           out.back().SetCigar(*cig2use);
         
@@ -1302,11 +1300,11 @@ main(int argc, char** argv) {
 
         out.push_back(r);
         
-        out.back().AddIntTag("ZH",  stat.numMismatches);
+        out.back().AddIntTag(DEFAULT_ZTAG_HUMAN,  stat.numMismatches);
         if (hasNumtNN)
-          out.back().AddIntTag("ZN",  numtStat.numMismatches);
+          out.back().AddIntTag(DEFAULT_ZTAG_NUMT,  numtStat.numMismatches);
         else
-          out.back().AddIntTag("ZN",  NUMT_NONN_PLACEHOLDER);
+          out.back().AddIntTag(DEFAULT_ZTAG_NUMT,  NUMT_NONN_PLACEHOLDER);
 
 
 
@@ -1332,11 +1330,11 @@ main(int argc, char** argv) {
         r.SetMapQuality(0);
         out.push_back(r);
         
-        out.back().AddIntTag("ZH",  NUMT_NONN_PLACEHOLDER);
+        out.back().AddIntTag(DEFAULT_ZTAG_HUMAN,  NUMT_NONN_PLACEHOLDER);
         if (hasNumtNN)
-          out.back().AddIntTag("ZN",  numtStat.numMismatches);
+          out.back().AddIntTag(DEFAULT_ZTAG_NUMT,  numtStat.numMismatches);
         else
-          out.back().AddIntTag("ZN",  NUMT_NONN_PLACEHOLDER);
+          out.back().AddIntTag(DEFAULT_ZTAG_NUMT,  NUMT_NONN_PLACEHOLDER);
 
       }
     }
