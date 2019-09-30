@@ -47,8 +47,8 @@ std::string DEFAULT_ZTAG_NUMT  = "ZN";
 #define DEFAULT_GAPOPEN 4
 #define DEFAULT_GAPEXTEND 4
 #define DEFAULT_BANDWIDTH 1000
-#define DEFAULT_THREEPRIMECLIP 1000
-#define DEFAULT_FIVEPRIMECLIP 1000
+#define DEFAULT_THREEPRIMECLIP 100000
+#define DEFAULT_FIVEPRIMECLIP 100000
 // how many PCR errors are expected (per bp in a given read)
 #define PCR_ERRORS_PER_BP 0.02
 // 1% sequencing error is assumed if the qual string is empty
@@ -500,11 +500,11 @@ getMismatches(BamRecord &r, const char* seq, const char *ref, int *mismatches, i
  */
 
 int
-getWeightedMismatches(BamRecord &r, const char* seq, const char *ref, const char *quals, const char *seqEnd, SummaryStat &stat, char qMax, Options &opt) {
+getWeightedMismatches(BamRecord &r, const char* seq, const char *ref, const char *quals, SummaryStat &stat, char qMax, Options &opt) {
 
 
   Cigar ciggy = r.GetCigar();
-  
+
   int i, len;
 
   const char *qualsInit = quals;
@@ -523,27 +523,22 @@ getWeightedMismatches(BamRecord &r, const char* seq, const char *ref, const char
   int mismatchQualsum=0;
   int sumPhred=0;
   
-  // scroll past the front-most soft/hard clipping tag
-  // don't need to adjust indexing b/c the input sequence are pre-adjusted for soft clipping
-  if (t == 'S' || t == 'H') 
+  // hard clipping... skip!
+  if (t == 'H') 
     ++c;
 
   
   if (c == ciggy.end()) // a cigar that's only clipping...? also weird, but okay I suppose.
     return -1;
   
-  
+
   for ( ; c != ciggy.end(); ++c) {
     t = c->Type();
-
     
     len = c->Length();
+    
     if (c->ConsumesReference() ) {
       if (c->ConsumesQuery() ) {
-
-        if (seq >= seqEnd) {
-          cerr << "Should never happen..." << endl;
-        }
 
         
         stat.numBases += len;
@@ -569,7 +564,6 @@ getWeightedMismatches(BamRecord &r, const char* seq, const char *ref, const char
           }
         }
       } else { // consumes ref, not query ( deletion in query of clipping)
-        
         if (! opt.ignoreIndels && t == 'D') {
           int qual = qMax; // defaults to Q20
           /* average of the two adjacent quality scores, iff they exist */
@@ -600,13 +594,38 @@ getWeightedMismatches(BamRecord &r, const char* seq, const char *ref, const char
         ref += len;
       }
     } else if ( c->ConsumesQuery() ) { // consumes query, not reference (insertion in query or clipping)
-      /* TODO; qualities of indels (take 2)! */
-      if (! opt.ignoreIndels && t == 'I') {
+
+      
+      // treat soft-clipping as mismatches
+      if (t == 'S') {
+        for ( i = 0; i < len; ++i, ++seq, ++quals) {
+          ++stat.numMismatches;
+          // quals is encoded either as 0 or -1 by seqlib if the quality string is empty.
+          if (*quals > 33) {
+            if (qMax <= *quals) { // high base-quality mismatches
+              mismatchQualsum += ((int)qMax);
+              ++stat.numQ20Mismatches;
+              stat.averageMismatchQuality += ((int)qMax);
+            } else {
+              mismatchQualsum += ((int)*quals)-33;
+              stat.averageMismatchQuality += ((int)*quals)-33;
+            }
+            
+          } else // quality string is empty... defaults to -1 in seqlib
+            mismatchQualsum += qMax;
+        }
+
+      } else if (! opt.ignoreIndels && t == 'I') {
 
         int thisSumPhred=0;
         for ( i = 0; i < len; ++i, ++seq, ++quals) {
-          sumPhred += (int)(*quals-33);
-          thisSumPhred += (int)(*quals-33);
+          if (*quals < 33) { // empty quality string, treated as Q20
+            sumPhred += qMax;
+            thisSumPhred += qMax;
+          } else {
+            sumPhred += (int)(*quals-33);
+            thisSumPhred += (int)(*quals-33);
+          }
         }
         thisSumPhred /= i;
         
@@ -657,12 +676,11 @@ realignIt(std::string seq, std::string qSeq, BWAWrapper &bwa, RefGenome &ref,  B
   
   // take a look at the best hits from BWA
   for (it = results.begin(); it != results.end(); ++it) {
-    int startPositionRead = it->AlignmentPosition();    
+    //int startPositionRead = it->AlignmentPosition();    
     int genomeStart = it->Position();
     int genomeStop =it->PositionEnd();
     chromName = bwa.ChrIDToName( it->ChrID()  );    
     refSubstr = ref.QueryRegion( chromName, genomeStart, genomeStop-1);
-    
 
     // Ensure you get the sequences from the bam record; not seq and qSeq
     // (this accounts for the strand; bam alignments are always on the + strand)
@@ -672,15 +690,21 @@ realignIt(std::string seq, std::string qSeq, BWAWrapper &bwa, RefGenome &ref,  B
     string thisSeq = it->Sequence();
     const char *seqRaw = thisSeq.c_str();
     
+
     // and compute summary statistics for this alignment
     int retval = getWeightedMismatches(*it,
-                          &(seqRaw[ startPositionRead ]),
-                          refSubstr.c_str(),
-                          &(qseqRaw[ startPositionRead ]),
-                          &(seqRaw[ thisSeq.size() ]),
-                          thisStat, DEFAULT_SEQ_CHAR-33, opt);
+                                       //&(seqRaw[ startPositionRead ]),
+                                       seqRaw,
+                                       refSubstr.c_str(),
+                                       qseqRaw,
+                                       //&(qseqRaw[ startPositionRead ]),
+                                       //&(seqRaw[ thisSeq.size() ]),
+                                       thisStat, DEFAULT_SEQ_CHAR-33, opt);
+
     if (retval < 0)
       continue;
+
+    
     //    if ( thisTot > nTot || // aligned more bases
       //         (thisTot==nTot && thisProb > *readProb )){ // aligned same # of bases, but better posterior
 
@@ -1128,6 +1152,7 @@ main(int argc, char** argv) {
   bwa2hum.SetGapOpen(opt.gapOpen);
   bwa2hum.SetGapExtension(opt.gapExtend);
   bwa2hum.SetBandwidth(opt.bandwidth);
+  
   bwa2hum.Set3primeClippingPenalty(opt.threePrimePenalty);
   bwa2hum.Set5primeClippingPenalty(opt.fivePrimePenalty);
 
