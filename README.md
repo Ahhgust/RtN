@@ -1,7 +1,7 @@
 # Removing Numts
 
 
-Numts (pronounced "new mights") are mitochondrial DNA segments that have been 
+[Numts](https://en.wikipedia.org/wiki/NUMT) (pronounced "new mights") are mitochondrial DNA segments that have been 
 transposed into the nuclear genome. If you work with mitochondrial genome data 
 they're a problem as there's no *good* way to identify them. <br><br><br>
 
