@@ -16,6 +16,40 @@
 #include "SeqLib/BamReader.h"
 #include "SeqLib/BamRecord.h"
 
+
+/*
+  Written by August Woerner
+
+  It is designed to take unaligned fasta sequences and reduce those to fastq sequences
+  
+  The procedure is:
+  Read in a bed file of regions (in a reference sequence)
+  Grab that sequence from the reference
+  Map that sequence to some unaligned fasta sequence and extract that sequence out (+10bp on either side)
+  And produce 5 fastq sequences (on the + strand of the reference) with (maximum quality) for every *unique* haplotype formed.
+  each unique amplicon is given a unique integer (starting with 0)
+
+  A lookup-table (LUT) is also provided
+  that lets you know which individual has which unique sequence
+
+  For us, the fastqs were further processed (added - strand, converted to bam and snp-called through converge)
+  and these SNP calls were stitched together again to give the full SNP-calling for that individual.
+
+
+  Algorithm notes:
+  limited support for 2-base IUPAC ambiguity codes is provided.
+  What the underlying haplotypes are with IUPAcs is not defined; e.g., 
+  if you have 2 (2-base) IUPACs you have 4 potential haplotypes. Likely you have 2 or 3 (instead)
+  Individuals that have more than 2 IUPACs WIHTIN AN OUTPUTTED READ (i.e., amplicon) are dropped
+  However, more than 2 IUPACs per individual are permitted (dealt with down-stream)
+ */
+
+
+
+
+
+
+
 // by default, pad 10 nucleotides 5' and 3'
 // this approximates adding the primers back into the sequence
 // so that the alignment can be made correctly (e.g.,
@@ -197,6 +231,13 @@ writeFastq(Amplicon amp, char *outdir) {
 
 }
 
+
+/*
+  Mito genomes may have IUPAC codes (eg. somatic mutations)
+  this gives the index of up to 1 IUPAC code in some string
+  if more than 1 is found this is an error (up to 4 haplotypes, likely only 2 are real) (MULTIPLE_IUPACS returned)
+  and if 0 are found NO_IUPACS is returned (not an error)
+ */
 
 int
 hasIUPAC(const string &stringy) {
