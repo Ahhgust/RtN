@@ -15,5 +15,6 @@ LIBS=-lhts -lseqlib -lhts -lbwa -lz -lpthread
 all: rtn.c
 	${CC} ${CFLAGS} ${INCLUDES} -Wall -o rtn rtn.c ${LIBS}
 
-
+f2f: fasta2fastq.cpp
+	${CC} ${CFLAGS} ${INCLUDES} -Wall -o f2f fasta2fastq.cpp ${LIBS}
 
