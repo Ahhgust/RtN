@@ -1,15 +1,17 @@
 CC=g++
 
-SEQLIB_DIR= /usr/local/src/SeqLib
+# /usr/local/src/SeqLib
+SEQLIB_DIR=.
+
 
 SYS := $(shell ${CC} -dumpmachine)
 
-CFLAGS=-Wall -std=c++11 -fsanitize=address -DDEBUG=0 -march=native -Ofast
-
-#CFLAGS=-Wall -std=c++11 -fsanitize=address -ggdb3
+CFLAGS=-Wall -std=c++11 -DDEBUG=0 -march=native -Ofast
 
 
-INCLUDES= -I${SEQLIB_DIR}/SeqLib/htslib  -I${SEQLIB_DIR}/SeqLib -L${SEQLIB_DIR}/SeqLib/src -L${SEQLIB_DIR}/SeqLib/bwa
+#INCLUDES=  -I${SEQLIB_DIR}/SeqLib/htslib  -I${SEQLIB_DIR}/SeqLib -L${SEQLIB_DIR}/SeqLib/src -L${SEQLIB_DIR}/SeqLib/bwa -L${SEQLIB_DIR}/SeqLib/htslib
+INCLUDES=-Wl,-rpath,${PWD}/SeqLib/htslib -I${SEQLIB_DIR}/SeqLib/htslib  -I${SEQLIB_DIR}/SeqLib -L${SEQLIB_DIR}/SeqLib/src -L${SEQLIB_DIR}/SeqLib/bwa -L${SEQLIB_DIR}/SeqLib/htslib
+
 LIBS=-lhts -lseqlib -lhts -lbwa -lz -lpthread
 
 all: rtn.c
