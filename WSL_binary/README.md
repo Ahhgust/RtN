@@ -1,0 +1,1 @@
+This is a statically linked binary for (Windows Subsystem for Linux)[https://docs.microsoft.com/en-us/windows/wsl/about]
