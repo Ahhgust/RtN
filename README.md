@@ -43,21 +43,26 @@ Or *Nix:
 
 ## Compilation instructions
  (somewhat unusual) Requirements:
- c++ json library
+ c++ json library (install as necessary)
 
 > sudo apt-get install libjsoncpp-dev
 
-Compilation instructions (with dynamic libraries; necessary for curl support)
+##Compilation instructions (with dynamic libraries; necessary for curl support)
 > git clone --recursive https://github.com/Ahhgust/RtN.git
-# Make htslib
+Make htslib
 > cd RtN/SeqLib/htslib
+<br>
 > autoconf
+<br>
 > autoheader
+<br>
 > ./configure --enable-libcurl
+<br>
 > make
 <br>
 Make Bwa
 > cd ../bwa
+<br>
 > make
 Make fermi-lite
 > cd ../fermi-lite
@@ -65,32 +70,40 @@ Make fermi-lite
 <br>
 Make SeqLib:
 > cd ..
+<br>
 > ./configure LDFLAGS='-lcurl -lcrypto'
 
-# Make RtN
+Make RtN
 > cd ..
+<br>
 > make
 
 
-# Compilation instructions (with static libraries)
-
+## Compilation instructions (with static libraries)
 > git clone --recursive https://github.com/Ahhgust/RtN.git
 <br>
 Make htslib
 > cd RtN/SeqLib/htslib
+<br>
 > autoconf
+<br>
 > autoheader
+<br>
 > ./configure --disable-libcurl
+<br>
 > make
 Make Bwa
 > cd ../bwa
+<br>
 > make
 Make fermi-lite
 > cd ../fermi-lite
+<br>
 > make
 <br>
 Make SeqLib:
 > cd ..
+<br>
 > ./configure 
 
 Make RtN
