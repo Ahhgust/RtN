@@ -18,26 +18,29 @@ The premise behind RtN is simple: only keep reads that map *well* to some known 
 ## Quick start
 
 Clone this repo (recursive also downloads SeqLib, as well as htslib):
-
-> git clone --recursive https://github.com/Ahhgust/RtN.git
+```
+git clone https://github.com/Ahhgust/RtN.git
+cd RtN
+```
 
 Change directories.
-Uncompress *humans.fa.bz2* a la:
+Uncompress and index *humans.fa.bz2* a la:
 
-> bunzip2 humans.fa.bz2
-
-Index the humans.fa with bwa:
-
-> bwa index humans.fa
-
+```
+bunzip2 humans.fa.bz2 && bwa index humans.fa
+``
 (This will take a while)
-
+<br>
+The Numt databases need no decompression/indexing
+<br>
 Select the appropriate static binary <br>
-Windows (through Windows Subsystem for Linux):
-[WSL_binary](https://github.com/Ahhgust/RtN/tree/master/WSL_binary)
-
-Or *Nix:
-
+[*nix](https://github.com/Ahhgust/RtN/tree/master/Nix_binary)
+<br> or <br>
+[Windows](https://github.com/Ahhgust/RtN/tree/master/WSL_binary)
+<br>
+And run it:
+```
+./rtn
 
 # How to compile!
  (somewhat unusual) Requirements:
