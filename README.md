@@ -1,4 +1,4 @@
-# Removing Numts
+# Remove the Numts!
 
 
 [Numts](https://en.wikipedia.org/wiki/NUMT) (pronounced "new mights") are mitochondrial DNA segments that have been 
@@ -31,4 +31,12 @@ Index the humans.fa with bwa:
 > bwa index humans.fa
 
 (This will take a while)
+
+Select the appropriate static binary <br>
+Windows (through Windows Subsystem for Linux):
+[WSL_binary](https://github.com/Ahhgust/RtN/tree/master/WSL_binary)
+
+Or *Nix:
+
+
 
