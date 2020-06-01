@@ -39,16 +39,17 @@ Windows (through Windows Subsystem for Linux):
 Or *Nix:
 
 
-
-
 ## Compilation instructions
  (somewhat unusual) Requirements:
  c++ json library (install as necessary)
-
-> sudo apt-get install libjsoncpp-dev
+ 
+```
+sudo apt-get install libjsoncpp-dev
+```
 
 ##Compilation instructions (with dynamic libraries; necessary for curl support)
 > git clone --recursive https://github.com/Ahhgust/RtN.git
+
 Make htslib
 > cd RtN/SeqLib/htslib
 <br>
