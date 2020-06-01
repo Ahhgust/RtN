@@ -39,7 +39,7 @@ Windows (through Windows Subsystem for Linux):
 Or *Nix:
 
 
-## Compilation instructions
+# How to compile!
  (somewhat unusual) Requirements:
  c++ json library (install as necessary)
  
@@ -61,6 +61,7 @@ cd ../fermi-lite # and Fermi-lite
 make
 cd ..            # and now the SeqLib library
 ./configure LDFLAGS='-lcurl -lcrypto'
+make
 cd ..        
 make             # and make RtN
 ```
@@ -79,7 +80,8 @@ make
 cd ../fermi-lite # and Fermi-lite
 make
 cd ..            # and now the SeqLib library
-./configure 
+./configure
+make
 cd ..        
 make static             # and make RtN
 ```
