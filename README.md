@@ -81,6 +81,7 @@ Make RtN
 
 ## Compilation instructions (with static libraries)
 > git clone --recursive https://github.com/Ahhgust/RtN.git
+
 <br>
 Make htslib
 > cd RtN/SeqLib/htslib
