@@ -28,7 +28,7 @@ Uncompress and index *humans.fa.bz2* a la:
 
 ```
 bunzip2 humans.fa.bz2 && bwa index humans.fa
-``
+```
 (This will take a while)
 <br>
 The Numt databases need no decompression/indexing
@@ -38,9 +38,12 @@ Select the appropriate static binary <br>
 <br> or <br>
 [Windows](https://github.com/Ahhgust/RtN/tree/master/WSL_binary)
 <br>
-And run it:
+And run it (help):
 ```
-./rtn
+./rtn -h
+```
+
+
 
 # How to compile!
  (somewhat unusual) Requirements:
