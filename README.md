@@ -48,36 +48,22 @@ sudo apt-get install libjsoncpp-dev
 ```
 
 ##Compilation instructions (with dynamic libraries; necessary for curl support)
-> git clone --recursive https://github.com/Ahhgust/RtN.git
-
-Make htslib
-> cd RtN/SeqLib/htslib
-<br>
-> autoconf
-<br>
-> autoheader
-<br>
-> ./configure --enable-libcurl
-<br>
-> make
-<br>
-Make Bwa
-> cd ../bwa
-<br>
-> make
-Make fermi-lite
-> cd ../fermi-lite
-> make
-<br>
-Make SeqLib:
-> cd ..
-<br>
-> ./configure LDFLAGS='-lcurl -lcrypto'
-
-Make RtN
-> cd ..
-<br>
-> make
+```
+git clone --recursive https://github.com/Ahhgust/RtN.git
+cd RtN/SeqLib/htslib # Make htslib
+autoconf
+autoheader
+./configure --enable-libcurl
+make
+cd ../bwa        # Make BWA
+make
+cd ../fermi-lite # and Fermi-lite
+make
+cd ..            # and now the SeqLib library
+./configure LDFLAGS='-lcurl -lcrypto'
+cd ..        
+make             # and make RtN
+```
 
 
 ## Compilation instructions (with static libraries)
