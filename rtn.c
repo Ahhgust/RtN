@@ -49,8 +49,7 @@ std::string DEFAULT_ZTAG_NUMT  = "ZN";
 #define DEFAULT_BANDWIDTH 1000
 #define DEFAULT_THREEPRIMECLIP 100000
 #define DEFAULT_FIVEPRIMECLIP 100000
-// how many PCR errors are expected (per bp in a given read)
-#define PCR_ERRORS_PER_BP 0.02
+
 // 1% sequencing error is assumed if the qual string is empty
 #define DEFAULT_SEQ_ERROR 0.01
 // '5' in the ascii table corresponds to a phred score of 20 which is a 1% chance of error
@@ -63,14 +62,6 @@ std::string DEFAULT_ZTAG_NUMT  = "ZN";
 
 #define DEFAULT_MIN_LIKELIHOOD 1e-5
 
-// The old ways are best.
-// good old macro to convert a phred quality score in ASCII format
-// into a probability
-#define PHRED2PROB(c) ( (c>32) ? (pow(10, ( ((int)(c-33))/-10.0))) : DEFAULT_SEQ_ERROR )
-
-// the mito genome is circularized...
-// thus 16569*2 bases in length
-#define MITO_LENGTH 33118
 
 struct Options {
   char *humanFastaDbFilename;
@@ -89,6 +80,7 @@ struct Options {
   bool verbose;
   bool train;
   bool writeOffTarget;
+  bool scaleLikelihoodByReadlen;
   double minLikelihood;
   int minReadSize;
 };
@@ -134,17 +126,17 @@ die(const char * message) {
        << "\t-h humanFasta" << endl
        << "\t-n numtFasta" << endl
        << "\t-b bam" << endl
-    << endl << "Optional (with default)" << endl
-    << endl << "The naming (of the mito genome)..." << endl
-    << "\t-c chromosome (" << DEFAULT_CHROM << ")" << endl
+    << endl << "Optional (with default)" << endl << endl
+    << "\t-c chromosome (" << DEFAULT_CHROM << ") (ie, what we call the mitochondrial contig)" << endl
        << "\t-m minMappingQuality (" << DEFAULT_MIN_MAP_QUALITY << ")" << endl
     << "\t-t (output training data; summary statistics on the reads)" << endl
     << "\t-s bedFile (soft-clip reads to the amplicons specified in the bedFile)" << endl
     << "\t-w (writes off-target reads; defaults to FALSE)" << endl
     << "\t-l length (" << DEFAULT_MIN_READ_LEN << ") the minimum read length, as mapped to the genome)" << endl
-    
+    << "\t-L likelihood (" << DEFAULT_MIN_LIKELIHOOD << ") the minimum read likelihood)" << endl
+    << "\t-S (this scales the read's likelihood (log(likelihood)/read length); with -L must reflect this (e.g., the threshold must be negative; -0.05 == 1e-5 with 100bp reads))" << endl
     << endl << "The error estimate..." << endl
-    << "\t-i ignoreIndels ( false )" << endl
+    << "\t-i ignoreIndels ( default: FALSE )" << endl
     
     << endl << "Read mapping parameters..." << endl
     << "\t-o gapOpen (" << DEFAULT_GAPOPEN << ")" << endl
@@ -164,6 +156,7 @@ die(const char * message) {
 Options
 parseOptions(char **argv) {
 
+  bool gotMinlFlag=false;
   char f, *arg;
   Options opt = {NULL, NULL, NULL};
   opt.chrom=DEFAULT_CHROM;
@@ -180,6 +173,7 @@ parseOptions(char **argv) {
   opt.writeOffTarget=false;
   opt.minReadSize = DEFAULT_MIN_READ_LEN;
   opt.minLikelihood = DEFAULT_MIN_LIKELIHOOD;
+  opt.scaleLikelihoodByReadlen = false;
   
   for (; *argv != NULL; ++argv) {
     arg = *argv;
@@ -216,9 +210,10 @@ parseOptions(char **argv) {
       opt.minReadSize = atoi(*argv);
     else if (f == 'x')
       opt.mismatch = atoi(*argv);
-    else if (f == 'L')
+    else if (f == 'L') {
       opt.minLikelihood = atof(*argv);
-    else if (f == 'w') {
+      gotMinlFlag=true;
+    } else if (f == 'w') {
       opt.writeOffTarget = true;
       --argv; // only a flag; no argument.
     } else if (f == 'i') {
@@ -230,6 +225,11 @@ parseOptions(char **argv) {
     } else if (f == 'v') {
       opt.verbose = true;
       --argv; // only a flag; no argument.
+    } else if (f == 'S') {
+      opt.scaleLikelihoodByReadlen = true;
+      --argv;
+      if (gotMinlFlag==false) // reset the default. 1e-5 was designed for 100bp reads. maps into -0.05
+        opt.minLikelihood = log10(DEFAULT_MIN_LIKELIHOOD)/100.0;
     } else {
       cerr << "Unknown flag: " << f << endl;
       die(NULL);
@@ -244,7 +244,15 @@ parseOptions(char **argv) {
   
   if (opt.nonhumanFastaDbFilename == NULL)
     die("I need a bam file! (-b bam)");
-  
+
+  if (opt.scaleLikelihoodByReadlen && opt.minLikelihood >0) {
+    die("Incompatible parameters: if you want to scale the likelihood by the read length, the threshold is based on log10(likelihood)/read length; thus the threshold must be NEGATIVE");
+  }
+
+  if (!opt.scaleLikelihoodByReadlen && opt.minLikelihood <0) {
+    die("Incompatible parameters: the likelihood threshold must be non-negative. Did you forget to include -S?");
+  }
+
   return opt;
 }
 
@@ -305,69 +313,6 @@ parseBed(const char* filename, GenomicRegionVector &vec, const BamHeader &hdr) {
   }
   return true;
 }
-
-
-/*
-  The expected number of sequencing errors in the read is estimated as the sum of the error probabilities.
-  (this is textbook)
-
-  Special accomodations are made if we're using Ion sequencing, in which case homopolymers have a high rate of error
-  BUT 
-  only when try to say how long the homopolymer stretch is. 
-  This function optionally compresses these stretches (effecitvely) 
-  by taking the min probability of error WITHIN the stretch
-  e.g.
-  GAAATCC
-  Would consider this sequence to be
-  GATC
-  and use the MIN of the 3 A probabilities
-  and use the MIN of the trailing 2 C probabilties would be used
-
- */
-int
-getExpectedNumberOfSequencingErrors(const string &seq, const string &quals, int startPos, int stopPos, bool compressHomopolymers) {
-  int i;
-  
-  double probError, prevProb=0.;
-  double sumOfError=0.;
-  int qualInt;
-  
-  for( i = startPos; i < stopPos; ++i) {
-
-    // BAM format...
-    // convert quality to probability of error...
-    qualInt = ((int)(quals[i]-33));
-    if (qualInt >= 0) {
-      probError = pow(10,    -(qualInt /10.0 ))  ;
-    } else {
-      probError = DEFAULT_SEQ_ERROR; // TODO: Make this an argument!
-    }
-    
-    //    cout << seq[i] << "\t" << quals[i] << "\t"  << ((int)(quals[i]-33)) << "\t" << probError << endl;
-    
-    if (compressHomopolymers) {
-      // we're in a homopolymer
-      // use the min error for the homopolymer as the estimator of the total error.
-      if (i && seq[i-1] == seq[i]) {
-        if (probError < prevProb)
-          prevProb = probError;
-      } else { // done w/ the homopolymer run...
-        sumOfError += prevProb;
-      }
-    } else {
-      sumOfError += probError;
-    }
-    prevProb = probError;
-  }
-  
-  // trailing case; last base used is a homopolymer.
-  if (compressHomopolymers && i && seq[i-1] == seq[i]) {
-    sumOfError += prevProb;
-  }
-  return ceil(sumOfError);
-}
-
-
 
 /*
 gets the start position in the read
@@ -1311,14 +1256,23 @@ main(int argc, char** argv) {
       if (hasNN) {
         // try just a simple filter on the read likelihood
         if (opt.ignoreIndels) {
-          
-          if (opt.minLikelihood > stat.readLikelihood) 
+
+          double like = stat.readLikelihood;
+          if (opt.scaleLikelihoodByReadlen) {
+            like = log10(like)/stat.numBases;
+          }
+
+          if (opt.minLikelihood > like)
             r.SetMapQuality(0);
           
 
         } else {
 
-          if (opt.minLikelihood > stat.readLikelihoodWithIndels)  
+          double like = stat.readLikelihoodWithIndels;
+          if (opt.scaleLikelihoodByReadlen)
+            like = log10(like)/stat.numBases;
+
+          if (opt.minLikelihood > like)
             r.SetMapQuality(0);
           
         }

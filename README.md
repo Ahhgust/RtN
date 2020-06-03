@@ -17,7 +17,7 @@ The premise behind RtN is simple: only keep reads that map *well* to some known 
 
 ## Quick start
 
-Clone this repo (recursive also downloads SeqLib, as well as htslib):
+Clone this repo (NO recursive downloads SeqLib, htslib, bwa, fermi-kit, ... )
 ```
 git clone https://github.com/Ahhgust/RtN.git
 cd RtN
