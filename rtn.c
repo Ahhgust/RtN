@@ -495,7 +495,7 @@ getWeightedMismatches(BamRecord &r, const char* seq, const char *ref, const char
             ++stat.numMismatches;
             // quals is encoded either as 0 or -1 by seqlib if the quality string is empty.
             if (*quals > 33) {
-              if (qMax <= *quals) { // high base-quality mismatches
+              if (qMax <= *quals-33) { // high base-quality mismatches
                 mismatchQualsum += ((int)qMax);
                 ++stat.numQ20Mismatches;
                 stat.averageMismatchQuality += ((int)qMax);
@@ -547,7 +547,7 @@ getWeightedMismatches(BamRecord &r, const char* seq, const char *ref, const char
           ++stat.numMismatches;
           // quals is encoded either as 0 or -1 by seqlib if the quality string is empty.
           if (*quals > 33) {
-            if (qMax <= *quals) { // high base-quality mismatches
+            if (qMax <= *quals-33) { // high base-quality mismatches
               mismatchQualsum += ((int)qMax);
               ++stat.numQ20Mismatches;
               stat.averageMismatchQuality += ((int)qMax);
@@ -1262,9 +1262,10 @@ main(int argc, char** argv) {
             like = log10(like)/stat.numBases;
           }
 
-          if (opt.minLikelihood > like)
+          if (opt.minLikelihood > like) {
+            cout << stat << endl;
             r.SetMapQuality(0);
-          
+          }
 
         } else {
 
