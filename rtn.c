@@ -1263,7 +1263,6 @@ main(int argc, char** argv) {
           }
 
           if (opt.minLikelihood > like) {
-            cout << stat << endl;
             r.SetMapQuality(0);
           }
 
