@@ -81,6 +81,7 @@ struct Options {
   bool train;
   bool writeOffTarget;
   bool scaleLikelihoodByReadlen;
+  bool filterReadPairs;
   double minLikelihood;
   int minReadSize;
 };
@@ -132,9 +133,10 @@ die(const char * message) {
     << "\t-t (output training data; summary statistics on the reads)" << endl
     << "\t-s bedFile (soft-clip reads to the amplicons specified in the bedFile)" << endl
     << "\t-w (writes off-target reads; defaults to FALSE)" << endl
-    << "\t-l length (" << DEFAULT_MIN_READ_LEN << ") the minimum read length, as mapped to the genome)" << endl
+    << "\t-l length ((" << DEFAULT_MIN_READ_LEN << ") the minimum read length, as mapped to the genome)" << endl
     << "\t-L likelihood (" << DEFAULT_MIN_LIKELIHOOD << ") the minimum read likelihood)" << endl
     << "\t-S (this scales the read's likelihood (log(likelihood)/read length); with -L must reflect this (e.g., the threshold must be negative; -0.05 == 1e-5 with 100bp reads))" << endl
+    << "\t-p (this filters on read pairs; if either read fails the likelihood requirement, they both do)" << endl
     << endl << "The error estimate..." << endl
     << "\t-i ignoreIndels ( default: FALSE )" << endl
     
@@ -162,6 +164,7 @@ parseOptions(char **argv) {
   opt.chrom=DEFAULT_CHROM;
   opt.bedFilename=NULL;
 
+  opt.filterReadPairs=false;
   opt.mismatch = DEFAULT_MISMATCH;
   opt.gapOpen = DEFAULT_GAPOPEN;
   opt.gapExtend = DEFAULT_GAPEXTEND;
@@ -219,6 +222,9 @@ parseOptions(char **argv) {
     } else if (f == 'i') {
       opt.ignoreIndels = true;
       --argv; // only a flag; no argument.
+    } else if (f == 'p') {
+      opt.filterReadPairs=true;
+      --argv;
     } else if (f == 't') {
       opt.train = true;
       --argv; // only a flag; no argument.
@@ -1071,7 +1077,8 @@ main(int argc, char** argv) {
   // to the genome position of this perfect hit as well as the mismatch distance to the nearest
   // numt
   unordered_map<string, pair<int, int>> perfectHmtHits;
-  
+
+  unordered_map<string, int> readPairs;
   
   int trainingSize=0;
   int numReadsSeen=0;
@@ -1253,6 +1260,9 @@ main(int argc, char** argv) {
 
       bool hasNumtNN = getSummaryStats(r, bwa2nonh, numtRef, results, numtStat, opt, cig2use);
 
+
+      bool mqToZero=false;
+      
       if (hasNN) {
         // try just a simple filter on the read likelihood
         if (opt.ignoreIndels) {
@@ -1264,6 +1274,7 @@ main(int argc, char** argv) {
 
           if (opt.minLikelihood > like) {
             r.SetMapQuality(0);
+            mqToZero=true;
           }
 
         } else {
@@ -1272,8 +1283,10 @@ main(int argc, char** argv) {
           if (opt.scaleLikelihoodByReadlen)
             like = log10(like)/stat.numBases;
 
-          if (opt.minLikelihood > like)
+          if (opt.minLikelihood > like) {
             r.SetMapQuality(0);
+            mqToZero=true;
+          }
           
         }
 
@@ -1294,7 +1307,7 @@ main(int argc, char** argv) {
 
         // again try the singleton design pattern.
         // that is, record the perfect hits to HmtDB. If you see another perfect hit it should be in your
-        // final bam, regardless of the q-score sctring.
+        // final bam, regardless of the q-score string.
         // It only works on a subset of cases (really, numMismatches==0 -> likelihood == 1,
         // which will be included no MATTER what.
         // otherwise, you have to consider the quality scores.
@@ -1308,7 +1321,7 @@ main(int argc, char** argv) {
       } else { // alignment to HmtDB returned... nothing?! 
         r.SetMapQuality(0);
         out.push_back(r);
-        
+        mqToZero=true;
         out.back().AddIntTag(DEFAULT_ZTAG_HUMAN,  NUMT_NONN_PLACEHOLDER);
         if (hasNumtNN)
           out.back().AddIntTag(DEFAULT_ZTAG_NUMT,  numtStat.numMismatches);
@@ -1316,6 +1329,13 @@ main(int argc, char** argv) {
           out.back().AddIntTag(DEFAULT_ZTAG_NUMT,  NUMT_NONN_PLACEHOLDER);
 
       }
+
+      if (opt.filterReadPairs && mqToZero) {
+        // todo: fix read-mate-pair info
+        // only true if trimming required (to amplicons)
+        readPairs[ r.Qname() ] = 1;
+      }
+      
     }
   }
   
@@ -1338,9 +1358,17 @@ main(int argc, char** argv) {
     // write it to the bam
     vector<BamRecord>::iterator it;
     
-    for (it = out.begin(); it != out.end(); ++it)
+    for (it = out.begin(); it != out.end(); ++it) {
+
+      if (opt.filterReadPairs &&
+          readPairs.find( it->Qname() ) != readPairs.end()) {
+
+        it->SetMapQuality(0);
+      }
+      
       bw.WriteRecord(*it);
 
+    }
     bw.Close();
     bw.BuildIndex(); // and be a good person. make an index too.
   }
