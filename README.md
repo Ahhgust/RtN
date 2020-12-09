@@ -64,7 +64,7 @@ In words:<br>
 
 <br>
 
-Recommendations for paired-end reads (likely Ion sequencing)
+Recommendations for paired-end reads (likely Illumina sequencing)
 
 ```
 ./rtn -p  -h humans.fa -n Calabrese_Dayama_Smart_Numts.fa -b yourBam.bam
@@ -72,6 +72,17 @@ Recommendations for paired-end reads (likely Ion sequencing)
 
 <br>
 -p: The same as above, but run in paired-end mode<br>
+
+
+## Single-source samples
+If you *know* that your data are single source there's an additional trick that can be used.
+Rather than aligning the reads to HmtDB it suffices to align the reads to just the single source haplotype.
+We call this running a bootstrap (as in the "pull yourself up by" as opposed to the resampling technique)
+To do a bootstrap, you can either use a fasta sequence (for the given individual) and then index it with bwa
+(aka,
+```bwa index yourFasta.fa```
+)
+
 
 
 
