@@ -3,7 +3,7 @@
 import random
 import fileinput
 import sys
-
+import os
 
 def readFasta(filename):
   seq = []
@@ -34,14 +34,13 @@ def decode(tok):
     t = "I"
     q=0
     i=0
-    # convert .1C into C
-    # and .2C into CC
+
     while allele[i] >= '0' and allele[i] <= '9':
       q = 10*q + ord(allele[i]) - ord('0')
       i += 1
 
     if i > 0:
-      allele = allele[i:] * q
+      allele = allele[i:] 
 
   elif tok.upper().endswith("DEL"): # deletion case
     t = "D"
@@ -52,6 +51,7 @@ def decode(tok):
     t="X" #mismatch
     pos = int(tok[:-1])
 
+  print(pos, allele, t)
   return(pos, allele, t)
 
 ref = readFasta(sys.argv[1])
@@ -70,7 +70,10 @@ for line in fileinput.input(sys.argv[2:]):
       continue
 
     scaffold = list(ref)
-    haps = line.rstrip().split("\t")
+    haps = line.rstrip().split()
+    if len(haps)==0:
+      continue
+    
     who = haps[0]
     haps = haps[3:]
     
@@ -93,10 +96,12 @@ for line in fileinput.input(sys.argv[2:]):
         print("Oops! " , h, p, a, t, file=sys.stderr)
         sys.exit(1)
 
-    print(">" , who,sep="")
-    if scaffold[3106]=='N':
-      print("".join(scaffold[0:3106]) , "".join(scaffold[3107:]) , sep="")
-    else:
-      print("".join(scaffold))
-    
+    with open(who + ".fa", "w") as out:
+      print(">" , who,sep="",file=out)
+      if scaffold[3106]=='N':
+        print("".join(scaffold[0:3106]) , "".join(scaffold[3107:]) , sep="", file=out)
+      else:
+        print("".join(scaffold), file=out)
+
+    os.system("bwa index " + who + ".fa")
 
