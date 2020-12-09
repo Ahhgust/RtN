@@ -77,7 +77,7 @@ Recommendations for paired-end reads (likely Illumina sequencing)
 ## Single-source samples
 If you *know* that your data are single source there's an additional trick that can be used.
 Rather than aligning the reads to HmtDB it suffices to align the reads to just the single source haplotype.
-We call this running a bootstrap (as in the "pull yourself up by" as opposed to the resampling technique)
+We call this running a bootstrap (as in the "pull yourself up by" as opposed to the resampling technique).
 To do a bootstrap, you can either use a fasta sequence (for the given individual) and then index it with bwa
 (aka,
 ```bwa index yourFasta.fa```
