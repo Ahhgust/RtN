@@ -63,10 +63,14 @@ In words:<br>
 
 
 <br>
+
 Recommendations for paired-end reads (likely Ion sequencing)
+
 ```
 ./rtn -p  -h humans.fa -n Calabrese_Dayama_Smart_Numts.fa -b yourBam.bam
 ```
+
+<br>
 -p: The same as above, but run in paired-end mode<br>
 
 
