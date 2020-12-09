@@ -82,7 +82,13 @@ To do a bootstrap, you can either use a fasta sequence (for the given individual
 (aka,
 ```bwa index yourFasta.fa```
 )
-
+<br>
+As an added convenience we've added a simply python script (empop2fa.py)
+that reads in an Empop-style encoded haplotype, and produces an indexed fasta.
+Use it as:
+```
+fgrep -v '#' empopFile | python3 empop2fa.py rCRS.fa
+```
 
 
 
