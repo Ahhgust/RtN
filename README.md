@@ -48,13 +48,14 @@ And run it (help):
 ```
 ./rtn -h
 ```
+<br>
 
-<br>
 Recommendations for single-end reads (likely Ion sequencing)
-<br>
+
 ```
 ./rtn -h humans.fa -n Calabrese_Dayama_Smart_Numts.fa -b yourBam.bam
 ```
+
 In words:<br>
 -h: Compute near-neighbor distances to the human sequences (and remove reads that align poorly to all known human haplotypes)<br>
 -n: And compute the near-neighbor distance to an (always incomplete) database of Numt alleles<br>
