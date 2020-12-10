@@ -15,7 +15,7 @@ One way to remove Numts is to use an alignment-based approach-- map your reads t
 
 The premise behind RtN! is simple: only keep reads that map *well* to some known mitochondrial sequence. The simplicitly of this approach is that Numts don't have to be annotated; if a read is very far from all known mitochondrial sequences it very likely harbors a lot of sequencing errors (better to ignore it), or it's an off-target alignment (which we don't want). RTN uses annotated genomes from [HmtDB](https://www.hmtdb.uniba.it/). If a read is similar to some known sequence it is kept, otherwise it's mapping quality is set to 0. RTN also maps reads to a database of annotated Numt alleles. The database includes alleles from: [Dayama et al](https://doi.org/10.1093/nar/gku1038), [Calabrese et al](https://doi.org/10.1186/1471-2105-13-S4-S15) and [Smart et al](https://doi.org/10.1016/j.fsigen.2019.102146). The reads are then decorated with two tags: Z**H**, which gives the minimum distance of the read to some annotated **H**uman sequence, and Z**N**, which gives the same distance but to the **N**umt alleles. The minimum distance is defined in two ways: either ignoring indels (just using the matched bases in the CIGAR string), or it can include the number of indels as well-- I would guess that the former is better for Ion sequencing, while the latter would be better for Illumina.<br><br>
 
-As we describe in our paper, most reads are ambiguous and exactly match both a human sequence and a Numt sequence.<br>
+As we describe in our paper, most reads are ambiguous and exactly match both a human sequence and a Numt sequence.
 The principle of RtN! is to keep ambiguous reads and flag them for manual review. 
 There are processing steps that can be done to make RtN! more aggressive in these cases, 
 but to be clear, some types of Numts are intractable. 
@@ -94,6 +94,15 @@ fgrep -v '#' empopFile | python3 empop2fa.py rCRS.fa
 By Empop-style file we mean a file that describes sequence differences to the rCRS sequence.
 The file is presumed to be tab-separated, with the variants starting at column 4 onwards.
 Click [here](https://raw.githubusercontent.com/gmitirol/empophub/master/AUT273_spec.emp) for an example.
+<br>
+
+RtN! can then be run similar to the above way.
+In practice we have had excellent luck using a more stringent likelihood threshold in this case (1e-3),
+```
+./rtn -L 1e-3 -p -h mySingleSource.fa -n Calabrese_Dayama_Smart_Numts.fa -b yourBam.bam
+```
+
+
 
 
 # How to compile!
