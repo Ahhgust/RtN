@@ -181,12 +181,18 @@ parseOptions(char **argv) {
   for (; *argv != NULL; ++argv) {
     arg = *argv;
     if (*arg != '-') {
-      cerr << "Unexpected argument: " << arg << endl;
+      if (*(argv-1) == NULL)
+        cerr << "Unexpected argument: (you specified a flag that required an argument... yet you gave no argument!) "<< endl;
+      else
+        cerr << "Unexpected argument: " << arg << endl;
+      
       die(NULL);
     }
     // all flags have arguments
     f = arg[1]; // flag
     ++argv; // and its argument
+
+    
     if (f == 'h') 
       opt.humanFastaDbFilename = *argv;
     else if (f == 'n')
@@ -1125,15 +1131,24 @@ main(int argc, char** argv) {
   numtRef.LoadIndex(opt.nonhumanFastaDbFilename);
   
   SeqLib::BamReader br;
-  br.Open( opt.bamFilename);
-
+  if (!br.Open( opt.bamFilename)) {
+    cerr << endl << endl << "Failed to open " << opt.bamFilename << " for reading " << endl << endl;
+    die(NULL);
+  }
+  
+  
+  
   BamWriter bw(SeqLib::BAM);
 
 
   if (! opt.train) {
     string outFilename(opt.bamFilename, findExtensionSubstringPosition( opt.bamFilename) );
     outFilename += ".rtn.bam";
-    bw.Open(outFilename);
+    if (!bw.Open(outFilename)) {
+      cerr << endl << endl << "Failed to open " << outFilename << " for writing!!" << endl << endl;
+      die(NULL);
+    }
+    
     bw.SetHeader( br.Header() );
     bw.WriteHeader();
   }
