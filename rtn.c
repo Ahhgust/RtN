@@ -30,6 +30,8 @@ using namespace std;
 // this gives the default distance
 #define NUMT_NONN_PLACEHOLDER 99
 
+#define MITOLEN 16561
+
 // taken from: https://stackoverflow.com/questions/5590381/easiest-way-to-convert-int-to-string-in-c
 #define INT2STRING( x ) static_cast< std::ostringstream & >( \
         ( std::ostringstream() << std::dec << x ) ).str()
@@ -82,6 +84,7 @@ struct Options {
   bool writeOffTarget;
   bool scaleLikelihoodByReadlen;
   bool filterReadPairs;
+  bool indexJump;
   double minLikelihood;
   int minReadSize;
 };
@@ -163,7 +166,7 @@ parseOptions(char **argv) {
   Options opt = {NULL, NULL, NULL};
   opt.chrom=DEFAULT_CHROM;
   opt.bedFilename=NULL;
-
+  opt.indexJump=false; // do we seek to the mito
   opt.filterReadPairs=false;
   opt.mismatch = DEFAULT_MISMATCH;
   opt.gapOpen = DEFAULT_GAPOPEN;
@@ -236,6 +239,9 @@ parseOptions(char **argv) {
       --argv; // only a flag; no argument.
     } else if (f == 'v') {
       opt.verbose = true;
+      --argv; // only a flag; no argument.
+    } else if (f == 'j') {
+      opt.indexJump = true;
       --argv; // only a flag; no argument.
     } else if (f == 'S') {
       opt.scaleLikelihoodByReadlen = true;
@@ -1165,6 +1171,14 @@ main(int argc, char** argv) {
     die(NULL);
   }
 
+  // testing: for whole genome data, this lets us skip to the mito
+  if (opt.indexJump) {
+    GenomicRegion mito(chromIndex, 1, MITOLEN);
+    if (!br.SetRegion(mito)) {
+      cerr << endl << "Failed to seek to the mitochondrial genome...? Is your bam file not indexed?" << endl;
+      die(NULL);
+    }
+  }
   
   BamRecord r;
   r.init();
