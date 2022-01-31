@@ -85,6 +85,7 @@ struct Options {
   bool scaleLikelihoodByReadlen;
   bool filterReadPairs;
   bool indexJump;
+  bool removeDups;
   double minLikelihood;
   int minReadSize;
 };
@@ -140,8 +141,9 @@ die(const char * message) {
     << "\t-L likelihood (" << DEFAULT_MIN_LIKELIHOOD << ") the minimum read likelihood)" << endl
     << "\t-S (this scales the read's likelihood (log(likelihood)/read length); with -L must reflect this (e.g., the threshold must be negative; -0.05 == 1e-5 with 100bp reads))" << endl
     << "\t-p (this filters on read pairs; if either read fails the likelihood requirement, they both do)" << endl
-    << endl << "The error estimate..." << endl
-    << "\t-i ignoreIndels ( default: FALSE )" << endl
+    << "\t-i (default: FALSE, ignores indels in the likelhood function. Recommended for Ion sequencing)" << endl
+    << "\t-j (default: FALSE, index jumps to the mito in the bam. Recommended for WGS data )" << endl
+    << "\t-d (default: FALSE, Removes PCR/optical duplicates. Recommended for WGS data )" << endl
     
     << endl << "Read mapping parameters..." << endl
     << "\t-o gapOpen (" << DEFAULT_GAPOPEN << ")" << endl
@@ -167,6 +169,7 @@ parseOptions(char **argv) {
   opt.chrom=DEFAULT_CHROM;
   opt.bedFilename=NULL;
   opt.indexJump=false; // do we seek to the mito
+  opt.removeDups=false;
   opt.filterReadPairs=false;
   opt.mismatch = DEFAULT_MISMATCH;
   opt.gapOpen = DEFAULT_GAPOPEN;
@@ -243,6 +246,9 @@ parseOptions(char **argv) {
     } else if (f == 'j') {
       opt.indexJump = true;
       --argv; // only a flag; no argument.
+    } else if (f == 'd') {
+      opt.removeDups=true;
+      --argv;
     } else if (f == 'S') {
       opt.scaleLikelihoodByReadlen = true;
       --argv;
@@ -1200,6 +1206,9 @@ main(int argc, char** argv) {
   
   
   while (br.GetNextRecord(r) ) {
+
+    if (opt.removeDups && r.DuplicateFlag())
+      continue;
 
     if ( r.DuplicateFlag() || ! r.MappedFlag() || r.SecondaryFlag() || r.SupplementaryFlag() ||
          r.MapQuality() < opt.minMappingQuality ||
