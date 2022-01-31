@@ -138,11 +138,11 @@ die(const char * message) {
     << "\t-s bedFile (soft-clip reads to the amplicons specified in the bedFile)" << endl
     << "\t-w (writes off-target reads; defaults to FALSE)" << endl
     << "\t-l length ((" << DEFAULT_MIN_READ_LEN << ") the minimum read length, as mapped to the genome)" << endl
-    << "\t-L likelihood (" << DEFAULT_MIN_LIKELIHOOD << ") the minimum read likelihood)" << endl
+    << "\t-L likelihood ((" << DEFAULT_MIN_LIKELIHOOD << ") the minimum read likelihood)" << endl
     << "\t-S (this scales the read's likelihood (log(likelihood)/read length); with -L must reflect this (e.g., the threshold must be negative; -0.05 == 1e-5 with 100bp reads))" << endl
     << "\t-p (this filters on read pairs; if either read fails the likelihood requirement, they both do)" << endl
     << "\t-i (default: FALSE, ignores indels in the likelhood function. Recommended for Ion sequencing)" << endl
-    << "\t-j (default: FALSE, index jumps to the mito in the bam. Recommended for WGS data )" << endl
+    << "\t-j (default: FALSE, index jumps to the mito in the bam. Recommended for WGS data. Index (.bai) required! )" << endl
     << "\t-d (default: FALSE, Removes PCR/optical duplicates. Recommended for WGS data )" << endl
     
     << endl << "Read mapping parameters..." << endl
