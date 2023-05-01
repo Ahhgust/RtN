@@ -1,4 +1,4 @@
-#track type=bedDetail ionVersion=4.0 name="PrecisionID_mtDNA_WG_targets.bed" description="PrecisionID_mtDNA_WG_targets_v1.bed"
+#track type=bedDetail ionVersion=4.0 name="PrecisionID_mtDNA_WG_targets.bed" description="PrecisionID_mtDNA_WG_targets_v1.bed"'
 chrM	15	119	mt_1	0	+	.	.
 chrM	118	248	mt_2	0	+	.	.
 chrM	247	329	mt_3	0	+	.	.
