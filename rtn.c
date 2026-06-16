@@ -32,9 +32,11 @@ using namespace std;
 
 #define MITOLEN 16561
 
-// taken from: https://stackoverflow.com/questions/5590381/easiest-way-to-convert-int-to-string-in-c
-#define INT2STRING( x ) static_cast< std::ostringstream & >( \
+/* taken from: https://stackoverflow.com/questions/5590381/easiest-way-to-convert-int-to-string-in-c
+ removed on 6/16. Use c++11 standard and call it a day
+ #define INT2STRING( x ) dynamic_cast< std::ostringstream & >( \
         ( std::ostringstream() << std::dec << x ) ).str()
+*/
 
 char DEFAULT_CHROM[] = "chrM"; 
 
@@ -86,6 +88,7 @@ struct Options {
   bool filterReadPairs;
   bool indexJump;
   bool removeDups;
+  bool keepImproper;
   double minLikelihood;
   int minReadSize;
 };
@@ -136,7 +139,8 @@ die(const char * message) {
        << "\t-m minMappingQuality (" << DEFAULT_MIN_MAP_QUALITY << ")" << endl
     << "\t-t (output training data; summary statistics on the reads)" << endl
     << "\t-s bedFile (soft-clip reads to the amplicons specified in the bedFile)" << endl
-    << "\t-w (writes off-target reads; defaults to FALSE)" << endl
+    << "\t-w (writes off-target reads; includes impropers/duplicates/unmapped; defaults to FALSE)" << endl
+       << "\t-k (keeps improper pairs)" << endl
     << "\t-l length ((" << DEFAULT_MIN_READ_LEN << ") the minimum read length, as mapped to the genome)" << endl
     << "\t-L likelihood (" << DEFAULT_MIN_LIKELIHOOD << ") the minimum read likelihood)" << endl
     << "\t-S (this scales the read's likelihood (log(likelihood)/read length); with -L must reflect this (e.g., the threshold must be negative; -0.05 == 1e-5 with 100bp reads))" << endl
@@ -171,6 +175,7 @@ parseOptions(char **argv) {
   opt.indexJump=false; // do we seek to the mito
   opt.removeDups=false;
   opt.filterReadPairs=false;
+  opt.keepImproper=false;
   opt.mismatch = DEFAULT_MISMATCH;
   opt.gapOpen = DEFAULT_GAPOPEN;
   opt.gapExtend = DEFAULT_GAPEXTEND;
@@ -236,6 +241,9 @@ parseOptions(char **argv) {
       --argv; // only a flag; no argument.
     } else if (f == 'p') {
       opt.filterReadPairs=true;
+      --argv;
+    } else if (f == 'k') {
+      opt.keepImproper=true;
       --argv;
     } else if (f == 't') {
       opt.train = true;
@@ -736,7 +744,8 @@ getSummaryStats(BamRecord &r, BWAWrapper &bwa, RefGenome &ref,  BamRecordVector 
 
 void
 softclipEverything(BamRecord &r) {
-  string s = INT2STRING(r.Length() ) + "S";
+  //string s = INT2STRING(r.Length() ) + "S";
+  std::string s = std::to_string(r.Length()) + "S"; // c++11
   r.SetCigar(s);
 }
 
@@ -1209,17 +1218,8 @@ main(int argc, char** argv) {
 
     if (opt.removeDups && r.DuplicateFlag())
       continue;
-
-    if ( r.DuplicateFlag() || ! r.MappedFlag() || r.SecondaryFlag() || r.SupplementaryFlag() ||
-         r.MapQuality() < opt.minMappingQuality ||
-         (r.PairedFlag() && ! r.ProperPair())
-         ) {
-      if (! opt.train && opt.writeOffTarget) {
-        out.push_back(r);
-      }
-      continue;
-    }
-  
+    
+    // off target
     chrID = r.ChrID();
     if (chrID != chromIndex) {
       if (! opt.train && opt.writeOffTarget) {
@@ -1228,7 +1228,27 @@ main(int argc, char** argv) {
       continue;
     }
 
-    
+    // modified 6/16/2026
+    // only remove improper pairs if the -k flag was not set.
+    if (! opt.keepImproper &&  (r.PairedFlag() && ! r.ProperPair())) {
+      if (! opt.train && opt.writeOffTarget) {
+        out.push_back(r);
+      }
+      continue;
+    }
+
+    // also modified on 6/16/2026
+    // if the read fails the other conditions, skip it.
+    // note that all reads are retained (but not evaluated for numts) IF the writeOffRarget flag is set.
+    if ( r.DuplicateFlag() || ! r.MappedFlag() || r.SecondaryFlag() || r.SupplementaryFlag() ||
+         r.MapQuality() < opt.minMappingQuality
+         ) {
+      if (! opt.train && opt.writeOffTarget) {
+        out.push_back(r);
+      }
+      continue;
+    }
+  
     Cigar orig = r.GetCigar();
     Cigar newCig;
     Cigar *cig2use= &orig;
