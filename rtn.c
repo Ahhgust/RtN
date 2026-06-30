@@ -139,7 +139,7 @@ die(const char * message) {
        << "\t-m minMappingQuality (" << DEFAULT_MIN_MAP_QUALITY << ")" << endl
     << "\t-t (output training data; summary statistics on the reads)" << endl
     << "\t-s bedFile (soft-clip reads to the amplicons specified in the bedFile)" << endl
-    << "\t-w (writes off-target reads; includes impropers/duplicates/unmapped; defaults to FALSE)" << endl
+    << "\t-W (writes off-target reads; includes impropers/duplicates/unmapped; defaults to FALSE)" << endl
        << "\t-k (keeps improper pairs)" << endl
     << "\t-l length ((" << DEFAULT_MIN_READ_LEN << ") the minimum read length, as mapped to the genome)" << endl
     << "\t-L likelihood (" << DEFAULT_MIN_LIKELIHOOD << ") the minimum read likelihood)" << endl
@@ -233,7 +233,7 @@ parseOptions(char **argv) {
     else if (f == 'L') {
       opt.minLikelihood = atof(*argv);
       gotMinlFlag=true;
-    } else if (f == 'w') {
+    } else if (f == 'W') {
       opt.writeOffTarget = true;
       --argv; // only a flag; no argument.
     } else if (f == 'i') {
