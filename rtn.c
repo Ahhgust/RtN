@@ -89,6 +89,8 @@ struct Options {
   bool indexJump;
   bool removeDups;
   bool keepImproper;
+  bool keepSupplementary; // added 7/1/2026
+  bool keepSupplementaryWhenPrimaryNotMito; // added 7/1/2026
   double minLikelihood;
   int minReadSize;
 };
@@ -148,6 +150,8 @@ die(const char * message) {
     << "\t-i (default: FALSE, ignores indels in the likelhood function. Recommended for Ion sequencing)" << endl
     << "\t-j (default: FALSE, index jumps to the mito in the bam. Recommended for WGS data )" << endl
     << "\t-d (default: FALSE, Removes PCR/optical duplicates. Recommended for WGS data )" << endl
+    << "\t-u (keeps supplementary alignments; evaluates them for Numts)" << endl
+    << "\t-a (keeps supplementary alignments when their primary alignment is not mapped to mitochondria; evaluates them for Numts)" << endl
     
     << endl << "Read mapping parameters..." << endl
     << "\t-o gapOpen (" << DEFAULT_GAPOPEN << ")" << endl
@@ -188,6 +192,9 @@ parseOptions(char **argv) {
   opt.minReadSize = DEFAULT_MIN_READ_LEN;
   opt.minLikelihood = DEFAULT_MIN_LIKELIHOOD;
   opt.scaleLikelihoodByReadlen = false;
+  opt.keepSupplementary=false;
+  opt.keepSupplementaryWhenPrimaryNotMito=false;
+
   
   for (; *argv != NULL; ++argv) {
     arg = *argv;
@@ -244,6 +251,12 @@ parseOptions(char **argv) {
       --argv;
     } else if (f == 'k') {
       opt.keepImproper=true;
+      --argv;
+    } else if (f == 'u') {
+      opt.keepSupplementary=true;
+      --argv;
+    } else if (f == 'a') {
+      opt.keepSupplementaryWhenPrimaryNotMito=true;
       --argv;
     } else if (f == 't') {
       opt.train = true;
@@ -1228,6 +1241,42 @@ main(int argc, char** argv) {
       continue;
     }
 
+    if ( r.DuplicateFlag() || ! r.MappedFlag() || r.SecondaryFlag() ||
+     (! opt.keepSupplementary && r.SupplementaryFlag()) ||
+	 r.MapQuality() < opt.minMappingQuality
+	 ) {
+      
+
+      // Determine whether to filter this supplementary alignment
+      bool filterSupplementary = false;
+      if (r.SupplementaryFlag()) {
+	if (opt.keepSupplementaryWhenPrimaryNotMito) {
+	  // keep supplementary only if its SA partner (primary) is NOT on chrM
+	  string saTag;
+	  bool hasSA = r.GetZTag("SA", saTag);
+	  if (hasSA) {
+	    string saChrom = saTag.substr(0, saTag.find(','));
+	    filterSupplementary = (saChrom == string(opt.chrom)); // filter if primary IS on chrM
+	  } else {
+	    filterSupplementary = false; // no SA tag: can't tell, so keep it
+	  }
+	} else {
+	  filterSupplementary = !opt.keepSupplementary; // original behaviour
+	}
+      }
+      
+      if ( r.DuplicateFlag() || ! r.MappedFlag() || r.SecondaryFlag() ||
+	   filterSupplementary ||
+	   r.MapQuality() < opt.minMappingQuality
+	   ) {
+	if (! opt.train && opt.writeOffTarget) {
+	  out.push_back(r);
+	}
+	continue;
+      }
+    }
+    
+    /* mulligan. let's try this again
     // modified 6/16/2026
     // only remove improper pairs if the -k flag was not set.
     if (! opt.keepImproper &&  (r.PairedFlag() && ! r.ProperPair())) {
@@ -1248,6 +1297,7 @@ main(int argc, char** argv) {
       }
       continue;
     }
+    */
   
     Cigar orig = r.GetCigar();
     Cigar newCig;
